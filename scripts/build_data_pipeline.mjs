@@ -8,6 +8,7 @@ const EARTH_RADIUS_M = 6_371_008.8;
 const CELL_SIZE_M = 250;
 const MAX_SEARCH_M = 3_000;
 const MAX_CANDIDATES = 8;
+const ROUTE_MATCH_DISTANCE_M = 500;
 
 function parseArgs(argv) {
   const args = { data: 'Data/Data', output: 'artifacts/data-pipeline', help: false };
@@ -32,7 +33,7 @@ function parseRows(file, columns) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const cells = trimmed.split(/[\s,]+/);
-    if (cells.length < columns || cells.slice(0, columns).some((cell) => cell === '')) {
+    if (cells.length !== columns || cells.some((cell) => cell === '')) {
       malformed += 1;
       continue;
     }
@@ -151,14 +152,18 @@ function minDistanceForRoute(point, routeIds, arcById) {
 function summarizeTime(track) {
   const gaps = [];
   let nonIncreasing = 0;
+  let largeGapCount = 0;
   for (let i = 1; i < track.length; i += 1) {
     const gap = track[i].timestamp - track[i - 1].timestamp;
     if (gap <= 0) nonIncreasing += 1;
-    else gaps.push(gap);
+    else {
+      gaps.push(gap);
+      if (gap > 10) largeGapCount += 1;
+    }
   }
   gaps.sort((a, b) => a - b);
   const median = gaps.length ? gaps[Math.floor(gaps.length / 2)] : null;
-  return { positive_gap_count: gaps.length, non_increasing_gap_count: nonIncreasing, median_positive_gap: median };
+  return { positive_gap_count: gaps.length, non_increasing_gap_count: nonIncreasing, large_gap_over_10s_count: largeGapCount, median_positive_gap: median };
 }
 
 function parseTrip(partition, directoryPath) {
@@ -187,6 +192,16 @@ function parseTrip(partition, directoryPath) {
   const route = routeParsed?.rows.map(({ values }) => values[0]) ?? null;
   const validArcIds = new Set(arcs.filter(Boolean).map((arc) => arc.id));
   const invalidRouteReferences = route ? route.filter((id) => !Number.isInteger(id) || !validArcIds.has(id)).length : null;
+  const idRange = (values) => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (let id = 0; id < values.length; id += 1) {
+      if (!values[id]) continue;
+      min = Math.min(min, id);
+      max = Math.max(max, id);
+    }
+    return Number.isFinite(min) ? { min, max } : null;
+  };
   const lats = nodes.map((node) => node.lat).filter(Number.isFinite);
   const cosLat = Math.cos((lats.length ? lats.reduce((sum, value) => sum + value, 0) / lats.length : 0) * Math.PI / 180);
   const projectedNodes = nodes.map((node) => node ? ({ ...node, ...project(node.lon, node.lat, cosLat) }) : undefined);
@@ -224,6 +239,10 @@ function parseTrip(partition, directoryPath) {
     invalidArcReferences,
     invalidRouteReferences,
     invalidRouteIds: route ? route.filter((id) => !Number.isInteger(id) || !validArcIds.has(id)) : null,
+    idRanges: {
+      node: idRange(nodes),
+      arc: idRange(arcs),
+    },
   };
 }
 
@@ -262,7 +281,9 @@ function makeCandidateRows(trip) {
     let labelArcId = null;
     if (trip.route) {
       const routeMatch = minDistanceForRoute(projected, trip.route, arcById);
-      labelArcId = routeMatch?.arc.id ?? null;
+      // A route arc farther than 500 m is not a credible positive for this
+      // observation, so leave it unlabeled instead of creating a false label.
+      labelArcId = routeMatch && routeMatch.distance <= ROUTE_MATCH_DISTANCE_M ? routeMatch.arc.id : null;
       if (labelArcId !== null && !candidates.some((candidate) => candidate.arc.id === labelArcId)) {
         candidates = [...candidates.slice(0, Math.max(0, MAX_CANDIDATES - 1)), routeMatch];
         candidates.sort((a, b) => a.distance - b.distance || a.arc.id - b.arc.id);
@@ -317,6 +338,9 @@ function tripSummary(trip) {
     malformed_route_rows: trip.partition === 'train' ? trip.malformed.route : null,
     invalid_arc_node_references: trip.invalidArcReferences,
     invalid_route_arc_references: trip.invalidRouteReferences,
+    node_id_range: trip.idRanges.node,
+    arc_id_range: trip.idRanges.arc,
+    route_ids_out_of_range: trip.invalidRouteIds,
     coordinate_bounds: bounds(trip.track),
     timestamp_gaps: summarizeTime(trip.track),
   };
@@ -370,7 +394,9 @@ function main() {
   const reportTrips = [];
   fs.mkdirSync(outputRoot, { recursive: true });
   const candidatePath = path.join(outputRoot, 'candidates.jsonl');
+  const trainingPath = path.join(outputRoot, 'training_candidates.jsonl');
   const candidateStream = fs.createWriteStream(candidatePath, { encoding: 'utf8' });
+  const trainingStream = fs.createWriteStream(trainingPath, { encoding: 'utf8' });
   let candidateRows = 0;
   let labeledRows = 0;
   let unlabeledRows = 0;
@@ -390,22 +416,44 @@ function main() {
         writeJsonLine(candidateStream, row);
         candidateRows += 1;
         if (row.label === null) unlabeledRows += 1;
-        else labeledRows += 1;
+        else {
+          labeledRows += 1;
+          writeJsonLine(trainingStream, row);
+        }
       }
       console.log(`${partition}/${trip.id}: ${trip.track.length} observations, ${trip.projectedArcs.length} arcs`);
     }
   }
   candidateStream.end();
+  trainingStream.end();
+  const aggregate = summaries.reduce((totals, row) => {
+    for (const key of ['track_rows', 'nodes_rows', 'arcs_rows', 'route_rows', 'malformed_track_rows', 'malformed_nodes_rows', 'malformed_arcs_rows', 'malformed_route_rows', 'invalid_arc_node_references', 'invalid_route_arc_references']) {
+      totals[key] += row[key] ?? 0;
+    }
+    totals.timestamp_gap_count += row.timestamp_gaps.positive_gap_count + row.timestamp_gaps.non_increasing_gap_count;
+    totals.non_increasing_timestamp_gaps += row.timestamp_gaps.non_increasing_gap_count;
+    totals.timestamp_gaps_over_10s += row.timestamp_gaps.large_gap_over_10s_count;
+    return totals;
+  }, {
+    track_rows: 0, nodes_rows: 0, arcs_rows: 0, route_rows: 0,
+    malformed_track_rows: 0, malformed_nodes_rows: 0, malformed_arcs_rows: 0, malformed_route_rows: 0,
+    invalid_arc_node_references: 0, invalid_route_arc_references: 0,
+    timestamp_gap_count: 0, non_increasing_timestamp_gaps: 0, timestamp_gaps_over_10s: 0,
+  });
+  const allPoints = summaries.flatMap((summary) => summary.coordinate_bounds ? [{ lon: summary.coordinate_bounds.min_lon, lat: summary.coordinate_bounds.min_lat }, { lon: summary.coordinate_bounds.max_lon, lat: summary.coordinate_bounds.max_lat }] : []);
   const report = {
     schema_version: 'pathsnap.data-report.v1',
     source: path.relative(process.cwd(), dataRoot),
     generated_at: new Date().toISOString(),
     partitions: Object.fromEntries(partitionNames.map((name) => [name, summaries.filter((s) => s.partition === name).length])),
     trip_count: summaries.length,
+    aggregate,
+    coordinate_bounds: bounds(allPoints),
     candidate_rows: candidateRows,
     labeled_candidate_rows: labeledRows,
     unlabeled_candidate_rows: unlabeledRows,
     student_test_label_policy: 'student_test route files are not read or emitted; all test candidate labels are null',
+    label_alignment_policy: 'Each training GPS observation is matched independently to the closest route arc segment in metric coordinates; row-index alignment is not assumed. This is a weak nearest-route proxy label, not a ground-truth GPS-to-route temporal alignment.',
     trips: summaries,
   };
   fs.writeFileSync(path.join(outputRoot, 'data_quality_report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -413,7 +461,7 @@ function main() {
   const csv = [csvHeader.join(','), ...summaries.map((summary) => csvHeader.map((key) => JSON.stringify(summary[key] ?? '')).join(','))].join('\n');
   fs.writeFileSync(path.join(outputRoot, 'trip_summary.csv'), `${csv}\n`);
   if (firstTrain) renderMap(firstTrain, path.join(outputRoot, `training_trip_${firstTrain.id}_map.svg`));
-  fs.writeFileSync(path.join(outputRoot, 'README.txt'), `PathSnap data pipeline outputs\n\n- candidates.jsonl: one row per observation/candidate arc; train labels use the nearest reference-route arc by geodesic point-to-segment distance.\n- data_quality_report.json: partition and per-trip counts, format/ID validation, coordinate bounds, and timestamp-gap summary.\n- trip_summary.csv: compact per-trip metrics.\n- training_trip_${firstTrain?.id ?? 'none'}_map.svg: GPS track and reference route from a training trip.\n\nCandidate features are listed in each row under features. Arc IDs are line-index IDs local to their trip. Student-test route files are never read.\n`);
+  fs.writeFileSync(path.join(outputRoot, 'README.txt'), `PathSnap data pipeline outputs\n\n- candidates.jsonl: one row per observation/candidate arc, including train labels and null student-test labels.\n- training_candidates.jsonl: labeled training candidate rows only.\n- data_quality_report.json: partition and aggregate counts, malformed rows, ID checks, coordinate bounds, and timestamp-gap summary.\n- trip_summary.csv: compact per-trip metrics.\n- training_trip_${firstTrain?.id ?? 'none'}_map.svg: GPS track and reference route from a training trip.\n\nCandidate features are listed in each row under features. Arc IDs are zero-based line-index IDs local to their trip. Training labels independently match each observation to its closest route arc; this is a documented proxy label. Student-test route files are never read.\n`);
   console.log(`Wrote ${candidateRows} candidate rows and EDA outputs to ${outputRoot}`);
 }
 
