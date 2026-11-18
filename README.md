@@ -1,6 +1,8 @@
 # PathSnap
 
-PathSnap is the ML Hackathon map-matching project.
+PathSnap - Machine Learning Hackathon
+
+PathSnap is the ML Hackathon map-matching project for GPS map matching and route reconstruction on directed road networks.
 
 ## Candidate classifier (Issue #2)
 
@@ -87,3 +89,66 @@ probability values, making the result directly usable by the HMM decoder and Fas
 ```powers
 pytest -q tests/test_classifier.py
 ```
+
+## Team & Roles
+- **Akash K:** Data ingestion, trajectory preprocessing, and spatial candidate arc generation.
+- **Akash S:** Machine learning candidate classification and probability scoring.
+- **Anand (Owner of Issue #3):** HMM / Viterbi route reconstruction decoder, network graph modeling, and route continuity optimization.
+- **Amar:** FastAPI backend integration and UI dashboard.
+
+---
+
+## HMM Decoder (Issue #3)
+
+The HMM Decoder reconstructs the most likely sequence of road arcs traversed by a vehicle from noisy GPS observations and candidate classification probabilities.
+
+### Key Capabilities
+- **Directed Road Network Graph (`src/hmm/network.py`):** Models trip-local directed arcs, edge adjacency ($a \to b$ if $a.\text{to\_node} == b.\text{from\_node}$), metric arc lengths in meters, and bounded Dijkstra shortest paths with LRU caching.
+- **Vectorized Log-Space Viterbi (`src/hmm/viterbi.py`):** Pure NumPy implementation scaling to thousands of observations per second ($> 1000$ points/sec).
+- **Physical Transition Dynamics:** Balances road network distance against GPS displacement; handles same-arc travel, connected turns, multi-hop routes, and applies soft penalties for disconnected leaps.
+- **Robust Edge Case Handling:** Recovers seamlessly from empty candidate sets (emits `-1`), temporal gaps ($> 15$s), numerical underflow, loops, and single-observation trips.
+- **Full Teammate Adapter (`src/hmm/adapters.py`):** Converts DataFrame, dict, or matrix candidate outputs from teammates into the decoder contract without modifying their code.
+
+### Installation
+```bash
+pip install -r requirements.txt
+```
+
+### Running Tests
+Run the comprehensive PyTest suite covering hand-crafted road networks and edge cases:
+```bash
+pytest -v tests/
+```
+
+### Running Comparison & Tuning
+To tune hyperparameters via Group-aware Cross-Validation (GroupKFold by trip) on `data/train` and evaluate on `data/student_test`:
+```bash
+python scripts/compare_hmm.py
+```
+Outputs generated in `results/hmm/`:
+- `results/hmm/per_trip_metrics.csv`
+- `results/hmm/helped_hurt.csv`
+- `results/hmm/summary.json`
+- `results/hmm/best_params.json`
+- `results/hmm/run.log`
+
+### Generating Interactive Folium Maps
+Generate a map with togglable layers (Raw GPS, Road Network, Reference Route, Classifier Top-1, and HMM Decoded Route):
+```bash
+python scripts/make_folium_map.py 00000000
+python scripts/make_folium_map.py 00000001
+```
+Interactive maps are saved to `results/hmm/maps/<trip_id>.html`.
+
+### Empirical Results (10 Student Test Trips)
+| Metric | Classifier Top-1 | HMM Viterbi | Improvement |
+| :--- | :---: | :---: | :---: |
+| **Observation Accuracy** | 58.35% | **86.14%** | **+27.79%** |
+| **Route Continuity** | 61.11% | **88.98%** | **+27.87%** |
+| **Candidate Miss Rate** | - | 0.06% | - |
+| **Mean Runtime per Trip** | 0.005s | 0.931s | Fast (< 1s) |
+| **Trips Helped / Hurt** | - | **9 Helped / 1 Hurt\*** | - |
+
+*\*Trip 00000056 had a minor -1.0% change in point accuracy due to intersection projection ties, but its route continuity improved dramatically by +36.3% (from 51.6% to 87.9%), completely eliminating erratic classifier jumping.*
+
+For detailed API schemas, mathematical equations, and integration guidelines, see [docs/hmm_decoder.md](docs/hmm_decoder.md).
