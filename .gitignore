@@ -30,3 +30,8 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Generated experiment outputs
+results/classifier/
+results/hmm/run.log
+results/hmm/maps/*.html
