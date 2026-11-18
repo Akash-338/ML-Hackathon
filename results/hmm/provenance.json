@@ -1,0 +1,9 @@
+{
+  "evaluation_source": "dev_distance_standin",
+  "candidate_generator": "src.hmm.dev_candidates.generate_dev_candidates",
+  "real_classifier_evaluation": false,
+  "evaluator_test_accessed": false,
+  "train_dir": "data/train",
+  "student_test_dir": "data/student_test",
+  "notes": "Checked-in metrics are a development stand-in snapshot. No upstream model.joblib or candidate JSONL was available."
+}

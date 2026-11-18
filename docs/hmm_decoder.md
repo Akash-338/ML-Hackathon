@@ -167,7 +167,7 @@ $$\text{backpointer}[j] = \text{argmax}(\text{incoming}[:, j]), \quad V_t = \max
 
 ---
 
-## 7. Real Measured Results (Student Test Set)
+## 7. Development Stand-In Results (Student Test Set)
 
 > **Reproducibility/status note:** The checked-in metrics were produced with
 > `src/hmm/dev_candidates.py`, a distance-based development stand-in. They are
@@ -175,7 +175,12 @@ $$\text{backpointer}[j] = \text{argmax}(\text{incoming}[:, j]), \quad V_t = \max
 > becomes a real classifier-vs-HMM benchmark when upstream candidate and score
 > artifacts are supplied; it never reads `evaluator_test` labels or data.
 
-All metrics below are generated from real executions of `scripts/compare_hmm.py` across the 10 student test trips (`data/student_test`):
+The checked-in metrics below are a stand-in execution snapshot from
+`scripts/compare_hmm.py` using `src/hmm/dev_candidates.py`, not upstream
+classifier scores. See `results/hmm/provenance.json` and
+`results/hmm/standin_summary.json`. A real-classifier comparison requires the
+per-trip candidate JSONL and `model.joblib`; those artifacts were unavailable
+in this worktree. The script never reads `evaluator_test` labels.
 
 | Trip ID | Points | Top-1 Acc | HMM Acc | $\Delta$ Acc | Top-1 Cont | HMM Cont | $\Delta$ Cont | Miss Rate | HMM Time | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -197,7 +202,7 @@ All metrics below are generated from real executions of `scripts/compare_hmm.py`
 
 ## 8. Optimal Tuned Hyperparameters
 
-Tuned via 3-Fold GroupKFold CV on `data/train`:
+Tuned via 3-Fold GroupKFold CV on stand-in candidate scores:
 - `beta`: `30.0`
 - `emission_weight`: `1.0`
 - `invalid_transition_penalty`: `80.0`
