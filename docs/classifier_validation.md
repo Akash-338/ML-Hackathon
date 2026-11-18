@@ -19,6 +19,11 @@ in this worktree. The Issue #2 entrypoint therefore could not perform the requir
 fit and 10-trip development evaluation during this session. It fails explicitly with a missing-
 input message instead of fabricating results or producing synthetic result files.
 
+Repository-history inspection also found no tracked `training_candidates.jsonl`,
+`candidates.jsonl`, or `Data/Data` source tree. The 80-trip real comparison, CV metrics, tuning
+trials, and plots therefore remain blocked by source-data availability, not by the classifier
+implementation or Python environment.
+
 The command for real validation is:
 
 ```powers
