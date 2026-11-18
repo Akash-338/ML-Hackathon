@@ -167,36 +167,19 @@ $$\text{backpointer}[j] = \text{argmax}(\text{incoming}[:, j]), \quad V_t = \max
 
 ---
 
-## 7. Development Stand-In Results (Student Test Set)
+## 7. Real-Score Results (80 Train / 10 Student-Test Trips)
 
-> **Reproducibility/status note:** The checked-in metrics were produced with
-> `src/hmm/dev_candidates.py`, a distance-based development stand-in. They are
-> not evidence from the upstream classifier implementation. The comparison script
-> becomes a real classifier-vs-HMM benchmark when upstream candidate and score
-> artifacts are supplied; it never reads `evaluator_test` labels or data.
+The comparison uses the permitted `pathsnap.candidates.v1` candidate JSONL and
+the trained logistic classifier artifact. It reports all 80 training trips and
+all 10 student-test trips; it never reads `evaluator_test` data or labels.
 
-The checked-in metrics below are a stand-in execution snapshot from
-`scripts/compare_hmm.py` using `src/hmm/dev_candidates.py`, not upstream
-classifier scores. See `results/hmm/provenance.json` and
-`results/hmm/standin_summary.json`. A real-classifier comparison requires the
-per-trip candidate JSONL and `model.joblib`; those artifacts were unavailable
-in this worktree. The script never reads `evaluator_test` labels.
-
-| Trip ID | Points | Top-1 Acc | HMM Acc | $\Delta$ Acc | Top-1 Cont | HMM Cont | $\Delta$ Cont | Miss Rate | HMM Time | Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `00000000` | 2,503 | 49.5% | **93.9%** | **+44.5%** | 79.0% | **93.0%** | +14.0% | 0.0% | 0.72s | **helped** |
-| `00000007` | 1,354 | 44.8% | **97.1%** | **+52.3%** | 79.8% | **100.0%** | +20.2% | 0.0% | 0.19s | **helped** |
-| `00000009` | 1,049 | 46.6% | **82.8%** | **+36.2%** | 46.5% | **84.0%** | +37.5% | 0.0% | 0.84s | **helped** |
-| `00000040` | 2,995 | 55.2% | **95.8%** | **+40.6%** | 75.3% | **95.2%** | +19.9% | 0.0% | 0.74s | **helped** |
-| `00000052` | 262 | 81.3% | **89.3%** | **+8.0%** | 52.0% | **84.6%** | +32.6% | 0.0% | 0.21s | **helped** |
-| `00000056` | 3,958 | 77.8% | **76.7%** | -1.0% | 51.6% | **87.9%** | **+36.3%** | 0.6% | 1.91s | **helped\*** |
-| `00000065` | 768 | 77.2% | **79.7%** | **+2.5%** | 52.6% | **85.4%** | +32.8% | 0.0% | 0.64s | **helped** |
-| `00000076` | 1,486 | 46.0% | **80.7%** | **+34.7%** | 54.4% | **82.6%** | +28.2% | 0.0% | 1.52s | **helped** |
-| `00000077` | 3,911 | 43.0% | **78.2%** | **+35.2%** | 70.5% | **89.9%** | +19.4% | 0.0% | 1.69s | **helped** |
-| `00000091` | 874 | 62.1% | **87.1%** | **+24.9%** | 49.3% | **87.2%** | +37.9% | 0.0% | 0.85s | **helped** |
-| **Mean** | **19,160** | **58.35%** | **86.14%** | **+27.79%** | **61.11%** | **88.98%** | **+27.87%** | **0.06%** | **0.931s** | **9 / 10 Helped** |
-
-*\*Note on Trip 00000056: Accuracy changed by -1.0% due to minor junction projection ties, while route continuity rose massively from 51.6% to 87.9% (+36.3%), completely eliminating discontinuous classifier jumps.*
+| Metric | Classifier Top-1 | HMM Viterbi | Improvement |
+| :--- | :---: | :---: | :---: |
+| Observation Accuracy | 70.99% | **77.61%** | **+6.62%** |
+| Route Continuity | 67.00% | **88.03%** | **+21.04%** |
+| Candidate Miss Rate | - | 0.21% | - |
+| Mean HMM Runtime per Trip | - | 0.402s | - |
+| Trips Helped / Hurt | - | **10 / 0** | - |
 
 ---
 
