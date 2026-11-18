@@ -22,3 +22,11 @@ venv/
 !.env.example
 .vscode/
 .idea/
+
+# Build and notebook/test caches
+dist/
+build/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
