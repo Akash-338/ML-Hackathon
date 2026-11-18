@@ -4,6 +4,117 @@ PathSnap - Machine Learning Hackathon
 
 PathSnap is the ML Hackathon map-matching project for GPS map matching and route reconstruction on directed road networks.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    D[Trip data<br/>track, nodes, arcs, route] --> P[Data pipeline<br/>scripts/build_data_pipeline.mjs]
+    P --> C[Candidate JSONL<br/>features + train labels]
+    C --> T[Classifier training<br/>scripts/train_classifier.py]
+    T --> M[Saved classifier<br/>artifacts/classifier/model.joblib]
+    C --> A[Candidate scorer<br/>src/classifier/predict.py]
+    M --> A
+    A --> S[Candidate probabilities]
+    S --> H[HMM decoder<br/>src/hmm/network.py + viterbi.py]
+    D --> H
+    H --> E[Evaluator pipeline<br/>src/evaluator_pipeline.py]
+    E --> API[FastAPI<br/>api/main.py]
+    API --> UI[Streamlit map<br/>ui/app.py]
+    UI --> L[Toggleable map layers<br/>GPS · roads · classifier · HMM]
+    D --> X[HMM comparison and map scripts]
+    H --> X
+    X --> R[Experiment outputs<br/>results/hmm/]
+```
+
+The `.route` files are reference routes. Training labels are created by the data
+pipeline as weak geometric proxy labels. The evaluator API keeps reference routes
+server-side; prediction inputs contain only GPS tracks and road-network files.
+
+## Project file guide
+
+This guide covers the files maintained by the project. Generated files are outputs,
+and each trip folder repeats the same input-file format. Python bytecode caches,
+`.pytest_cache`, `.git`, `node_modules`, and `venv` are tool or environment contents,
+not application source files.
+
+### Root files
+
+- `.gitignore` — tells Git which generated data, model artifacts, caches, and local environment files to leave untracked.
+- `README.md` — project overview, setup and run instructions, data contract, results, architecture, and this file guide.
+- `requirements.txt` — Python packages needed for modeling, route decoding, maps, API/UI, and tests.
+- `package.json` — Node.js package manifest for JavaScript tooling used by the repository.
+- `package-lock.json` — locks the exact Node.js dependency versions for repeatable installs.
+
+### Application code
+
+- `api/__init__.py` — marks `api` as a Python package.
+- `api/main.py` — FastAPI app: health and trip-list endpoints, map-data endpoint, prediction endpoint, pipeline loading, and filtering of reference-label fields before responses leave the API.
+- `ui/app.py` — Streamlit interface: connects to the API, selects trips, requests route reconstruction, and renders the GPS, nearby-road, classifier, and HMM Folium layers.
+- `src/__init__.py` — marks `src` as a Python package.
+- `src/evaluator_pipeline.py` — integrates saved classifier probabilities with the HMM decoder for one trip; evaluates against a reference route only in the server-side evaluation hook.
+- `src/classifier/__init__.py` — exports the classifier scoring interface.
+- `src/classifier/predict.py` — loads the trained model and scores candidate rows or observations.
+- `src/hmm/__init__.py` — exports the HMM decoder’s public classes and functions.
+- `src/hmm/adapters.py` — converts candidate rows, dictionaries, or matrices into aligned candidate arc and probability arrays; also loads candidate JSONL scores for comparisons.
+- `src/hmm/dev_candidates.py` — builds development-only candidate arcs and simulated scores when the trained classifier is not being used.
+- `src/hmm/evaluate.py` — aligns GPS observations to reference arcs and computes accuracy, continuity, and candidate-miss metrics.
+- `src/hmm/loader.py` — reads a trip’s track, nodes, arcs, and optional route file, then projects coordinates for metric calculations.
+- `src/hmm/network.py` — represents directed road arcs and provides bounded shortest-path distances used by HMM transitions.
+- `src/hmm/viterbi.py` — implements the log-space Viterbi decoder that selects a likely arc sequence from candidate scores and road connectivity.
+
+### Scripts
+
+- `scripts/build_data_pipeline.mjs` — parses trip files, generates nearby road-arc candidates and training proxy labels, and writes JSONL/EDA outputs.
+- `scripts/test_data_pipeline.mjs` — checks data-pipeline output behavior and privacy rules, including evaluator partition isolation.
+- `scripts/train_classifier.py` — compares five classifier families with trip-grouped cross-validation, optionally tunes Extra Trees, saves the chosen model, and scores student-test candidates without reading their labels.
+- `scripts/compare_hmm.py` — tunes HMM parameters on a training-trip subset, evaluates train and student-test trips, and writes metrics and prediction files.
+- `scripts/make_folium_map.py` — creates a standalone interactive Folium map for a trip, using real classifier artifacts when supplied or development stand-in candidates otherwise.
+
+### Tests
+
+- `tests/__init__.py` — marks the test directory as a Python package.
+- `tests/test_api.py` — checks API routes, input validation, pipeline behavior, and reference-label filtering.
+- `tests/test_classifier.py` — checks classifier data handling, training/evaluation behavior, and prediction interfaces.
+- `tests/test_evaluator_pipeline.py` — checks classifier-to-HMM integration and evaluator behavior.
+- `tests/test_network.py` — checks directed-network distances and path behavior.
+- `tests/test_viterbi.py` — checks decoder outputs, transitions, and edge cases.
+
+### Configuration, documentation, and supplied guidance
+
+- `configs/hmm_params.json` — HMM transition/emission parameters used by the decoder.
+- `docs/classifier_interface.md` — candidate/classifier data contract and integration details.
+- `docs/classifier_validation.md` — classifier validation approach and metric definitions.
+- `docs/hmm_decoder.md` — HMM model, route-decoding details, and integration notes.
+- `docs/PULL_REQUEST.md` — project pull-request notes and review context.
+- `docs/submission_evidence.md` — evidence and provenance notes for the project submission.
+- `Data/Documents/Assessment and Plagiarism Policy.docx` and `.pdf` — supplied assessment and plagiarism policy.
+- `Data/Documents/Dataset Exploration.docx` and `.pdf` — supplied dataset exploration notes.
+- `Data/Documents/Deliverables.docx` and `.pdf` — supplied project deliverables guidance.
+- `Data/Documents/Main Guidelines.docx` and `.pdf` — supplied main project guidelines.
+- `Data/Documents/Models and Training Guidelines.docx` and `.pdf` — supplied modeling and training guidance.
+
+### Data and generated outputs
+
+- `Data/Data/train/<trip-id>/` — training input trip files. Each trip has `.track` (GPS coordinates/time), `.nodes` (road-node coordinates), `.arcs` (directed node pairs), and `.route` (reference arc sequence).
+- `Data/Data/student_test/<trip-id>/` — student-test inputs in the same format. The pipeline does not use their `.route` files to create labels.
+- `Data/Data/evaluator_test/<trip-id>/` — held-out evaluator partition; do not use it for training or tuning.
+- `artifacts/data-pipeline/candidates.jsonl` — candidate features for train and student-test trips; student-test labels are null.
+- `artifacts/data-pipeline/training_candidates.jsonl` — labeled candidate rows for training trips only.
+- `artifacts/data-pipeline/data_quality_report.json` — partition, row, timestamp, coordinate, and ID validation summary.
+- `artifacts/data-pipeline/trip_summary.csv` — compact per-trip input and candidate statistics.
+- `artifacts/data-pipeline/training_trip_<id>_map.svg` — static GPS/reference-route view for a training trip.
+- `artifacts/data-pipeline/README.txt` — generated-output field and label-policy notes.
+- `artifacts/classifier/model.joblib` — fitted preprocessing and selected classifier pipeline.
+- `artifacts/classifier/metadata.json` — saved model identity, schema, seed, validation and provenance metadata.
+- `results/classifier/` — classifier run logs, model comparisons, tuning trials, predictions, plots, timing, and selection rationale (files appear after a full training run).
+- `results/hmm/best_params.json` — best HMM parameter configuration from the comparison run.
+- `results/hmm/per_trip_metrics.csv` and `summary.json` — per-trip and aggregate evaluation metrics.
+- `results/hmm/helped_hurt.csv` — trips where HMM did better or worse than classifier top-1, with comparison context.
+- `results/hmm/provenance.json` and `standin_summary.json` — records whether HMM results used real classifier scores or development stand-ins.
+- `results/hmm/run.log` — HMM tuning/evaluation progress and logs.
+- `results/hmm/maps/<trip-id>.html` — standalone interactive maps generated by the map script.
+- `results/hmm/predictions/<trip-id>.npz` — saved per-observation top-1, HMM, and (when available) reference arc IDs for analysis/map generation.
+
 ## Candidate classifier (Issue #2)
 
 The classifier consumes the Issue #1 `pathsnap.candidates.v1` JSONL contract. It performs 5-fold
@@ -202,3 +313,23 @@ Interactive maps are saved to `results/hmm/maps/<trip_id>.html`.
 | **Trips Helped / Hurt** | - | **9 Helped / 1 Hurt** | - |
 
 For detailed API schemas, mathematical equations, and integration guidelines, see [docs/hmm_decoder.md](docs/hmm_decoder.md).
+
+## Map UI
+
+Start the API and Streamlit map UI from the repository root in separate terminals:
+
+```powershell
+$env:PATHSNAP_UI_PARTITION = "student_test"
+$env:PATHSNAP_PIPELINE_FACTORY = "src.evaluator_pipeline:create_pipeline"
+python -m uvicorn api.main:app --reload
+```
+
+```powershell
+python -m streamlit run ui/app.py
+```
+
+The map UI uses the saved classifier at `artifacts/classifier`, candidate rows at
+`artifacts/data-pipeline/candidates.jsonl`, and `configs/hmm_params.json`. It displays
+GPS observations, a clipped nearby road network, classifier top candidates, and the
+HMM decoded route as independently toggleable layers. The API does not send reference
+route labels to the browser.

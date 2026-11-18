@@ -57,6 +57,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--bayesian-trials", type=int, default=30)
     parser.add_argument("--disable-bayesian", action="store_true")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use a deterministic capped sample and lightweight model settings for a quick smoke run.",
+    )
+    parser.add_argument(
+        "--max-train-rows",
+        type=int,
+        default=100_000,
+        help="Maximum candidate rows used in --fast mode.",
+    )
     return parser.parse_args()
 
 
@@ -119,11 +130,29 @@ def feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return frame[list(FEATURE_NAMES)].apply(pd.to_numeric, errors="coerce")
 
 
-def make_models() -> Dict[str, Pipeline]:
+def cap_training_rows(frame: pd.DataFrame, max_rows: int) -> pd.DataFrame:
+    """Deterministically cap rows while preserving trip and label coverage."""
+    if max_rows <= 0 or len(frame) <= max_rows:
+        return frame
+    trip_ids = frame["trip_id"].astype(str).unique()
+    rows_per_trip = max(1, (max_rows + len(trip_ids) - 1) // len(trip_ids))
+    samples = [
+        group.sample(n=min(len(group), rows_per_trip), random_state=SEED)
+        for _, group in frame.groupby("trip_id", sort=False)
+    ]
+    capped = pd.concat(samples, ignore_index=False).sort_index()
+    capped = capped.iloc[:max_rows].copy()
+    return capped
+
+
+def make_models(fast: bool = False) -> Dict[str, Pipeline]:
     preprocessor = [
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
     ]
+    forest_estimators = 50 if fast else 300
+    hist_iterations = 50 if fast else 200
+    knn_neighbors = 5 if fast else 15
     return {
         "logistic_regression": Pipeline(
             preprocessor
@@ -142,7 +171,7 @@ def make_models() -> Dict[str, Pipeline]:
         ),
         "knn": Pipeline(
             preprocessor
-            + [("model", KNeighborsClassifier(n_neighbors=15, weights="distance", p=2))]
+            + [("model", KNeighborsClassifier(n_neighbors=knn_neighbors, weights="distance", p=2))]
         ),
         "random_forest": Pipeline(
             [
@@ -150,8 +179,8 @@ def make_models() -> Dict[str, Pipeline]:
                 (
                     "model",
                     RandomForestClassifier(
-                        n_estimators=300,
-                        max_depth=None,
+                        n_estimators=forest_estimators,
+                        max_depth=12 if fast else None,
                         min_samples_leaf=1,
                         class_weight="balanced_subsample",
                         random_state=SEED,
@@ -166,8 +195,8 @@ def make_models() -> Dict[str, Pipeline]:
                 (
                     "model",
                     ExtraTreesClassifier(
-                        n_estimators=300,
-                        max_depth=None,
+                        n_estimators=forest_estimators,
+                        max_depth=12 if fast else None,
                         min_samples_leaf=1,
                         class_weight="balanced",
                         random_state=SEED,
@@ -183,8 +212,8 @@ def make_models() -> Dict[str, Pipeline]:
                     "model",
                     HistGradientBoostingClassifier(
                         learning_rate=0.08,
-                        max_iter=200,
-                        max_leaf_nodes=31,
+                        max_iter=hist_iterations,
+                        max_leaf_nodes=15 if fast else 31,
                         l2_regularization=1.0,
                         random_state=SEED,
                     ),
@@ -417,6 +446,17 @@ def main() -> int:
     train["label"] = train["label"].astype(int)
     if set(train["label"].unique()) != {0, 1}:
         raise ValueError("Training labels must contain both positive and negative candidates.")
+    if args.fast:
+        args.cv_folds = min(args.cv_folds, 2)
+        args.disable_bayesian = True
+        train = cap_training_rows(train, args.max_train_rows)
+        if set(train["label"].unique()) != {0, 1}:
+            raise ValueError("Fast-mode sampling removed one of the label classes.")
+        logger.info(
+            "Fast mode: capped training data to %d candidate rows across %d trips",
+            len(train),
+            train["trip_id"].nunique(),
+        )
     if train["trip_id"].nunique() < args.cv_folds:
         raise ValueError("At least cv_folds distinct training trip IDs are required.")
 
@@ -428,7 +468,7 @@ def main() -> int:
     X_train = feature_frame(train)
     y_train = train["label"].to_numpy(dtype=int)
 
-    for model_name, model in make_models().items():
+    for model_name, model in make_models(fast=args.fast).items():
         cv_record = cross_validate(model_name, model, train, args.cv_folds)
         comparison_records.append(cv_record)
         fitted = clone(model)

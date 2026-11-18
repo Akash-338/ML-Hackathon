@@ -59,6 +59,13 @@ class SavedArtifactPipeline:
 
         candidates = pd.DataFrame(_candidate_rows(self.candidates_path, trip_id))
         candidates["probability"] = self.scorer.predict_frame(candidates)
+        top1 = (
+            candidates.sort_values("probability", ascending=False)
+            .drop_duplicates("observation_index")
+            .sort_values("observation_index")["candidate_arc_id"]
+            .astype(int)
+            .tolist()
+        )
         candidate_arrays, score_arrays = adapt_dataframe_to_decoder(
             candidates.assign(step=candidates["observation_index"], arc_id=candidates["candidate_arc_id"]),
             len(timestamps),
@@ -76,14 +83,16 @@ class SavedArtifactPipeline:
         )
         self._trip_inputs[trip_id] = (gps_xy, nodes_lonlat, network)
         route = decoded.pred_arc_ids.tolist()
-        coordinates = [
-            nodes_lonlat[int(network.arcs[arc_id, 0])].tolist()
-            for arc_id in route
-            if 0 <= arc_id < network.num_arcs
-        ]
+        def segments(arc_ids):
+            return [
+                [nodes_lonlat[int(network.arcs[a, 0])].tolist(), nodes_lonlat[int(network.arcs[a, 1])].tolist()]
+                for a in arc_ids if 0 <= int(a) < network.num_arcs
+            ]
         return {
             "predicted_route": route,
-            "route_coordinates": coordinates,
+            "classifier_top1_route": top1,
+            "route_segments": segments(route),
+            "classifier_top1_segments": segments(top1),
             "decoder_source": decoded.source,
             "segment_breaks": decoded.segment_breaks,
         }
