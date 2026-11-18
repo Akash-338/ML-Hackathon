@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { finished } from 'node:stream/promises';
 
 const EARTH_RADIUS_M = 6_371_008.8;
 const CELL_SIZE_M = 250;
@@ -11,27 +12,44 @@ const MAX_CANDIDATES = 8;
 const ROUTE_MATCH_DISTANCE_M = 500;
 
 function parseArgs(argv) {
-  const args = { data: 'Data/Data', output: 'artifacts/data-pipeline', help: false };
+  const args = {
+    data: 'Data/Data',
+    output: 'artifacts/data-pipeline',
+    expectedTrain: null,
+    expectedStudentTest: null,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--help' || argv[i] === '-h') args.help = true;
     else if (argv[i] === '--data' && argv[i + 1]) args.data = argv[++i];
     else if (argv[i] === '--output' && argv[i + 1]) args.output = argv[++i];
+    else if (argv[i] === '--expect-train' && argv[i + 1]) args.expectedTrain = Number(argv[++i]);
+    else if (argv[i] === '--expect-student-test' && argv[i + 1]) args.expectedStudentTest = Number(argv[++i]);
     else throw new Error(`Unknown or incomplete option: ${argv[i]}`);
+  }
+  if (args.expectedTrain !== null && (!Number.isInteger(args.expectedTrain) || args.expectedTrain < 0)) {
+    throw new Error('--expect-train must be a non-negative integer');
+  }
+  if (args.expectedStudentTest !== null && (!Number.isInteger(args.expectedStudentTest) || args.expectedStudentTest < 0)) {
+    throw new Error('--expect-student-test must be a non-negative integer');
   }
   return args;
 }
 
 function usage() {
-  return 'Usage: node scripts/build_data_pipeline.mjs [--data Data/Data] [--output artifacts/data-pipeline]';
+  return 'Usage: node scripts/build_data_pipeline.mjs [--data Data/Data] [--output artifacts/data-pipeline] [--expect-train 80] [--expect-student-test 10]';
 }
 
 function parseRows(file, columns) {
   if (!fs.existsSync(file)) return { rows: [], missing: true, malformed: 0, physical_lines: 0 };
   const rows = [];
   let malformed = 0;
+  let rowIndex = 0;
   for (const [lineIndex, line] of fs.readFileSync(file, 'utf8').split(/\r?\n/).entries()) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
+    const index = rowIndex;
+    rowIndex += 1;
     const cells = trimmed.split(/[\s,]+/);
     if (cells.length !== columns || cells.some((cell) => cell === '')) {
       malformed += 1;
@@ -42,7 +60,7 @@ function parseRows(file, columns) {
       malformed += 1;
       continue;
     }
-    rows.push({ values, line: lineIndex + 1 });
+    rows.push({ values, line: lineIndex + 1, index });
   }
   return { rows, missing: false, malformed, physical_lines: fs.readFileSync(file, 'utf8').split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith('#')).length };
 }
@@ -173,13 +191,13 @@ function parseTrip(partition, directoryPath) {
   const nodesParsed = parseRows(file('nodes'), 2);
   const arcsParsed = parseRows(file('arcs'), 2);
   const routePresent = fs.existsSync(file('route'));
-  const track = trackParsed.rows.map(({ values, line }) => ({ lon: values[0], lat: values[1], timestamp: values[2], sourceIndex: line - 1 }));
+  const track = trackParsed.rows.map(({ values, index }) => ({ lon: values[0], lat: values[1], timestamp: values[2], sourceIndex: index }));
   const nodes = [];
-  for (const { values, line } of nodesParsed.rows) nodes[line - 1] = { lon: values[0], lat: values[1] };
+  for (const { values, index } of nodesParsed.rows) nodes[index] = { lon: values[0], lat: values[1] };
   const arcs = [];
   let invalidArcReferences = 0;
   for (const row of arcsParsed.rows) {
-    const id = row.line - 1;
+    const id = row.index;
     const [from, to] = row.values;
     if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || !nodes[from] || !nodes[to]) {
       invalidArcReferences += 1;
@@ -380,7 +398,7 @@ function writeJsonLine(stream, value) {
   stream.write(`${JSON.stringify(value)}\n`);
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());
@@ -406,6 +424,10 @@ function main() {
     const dir = path.join(dataRoot, partition);
     if (!fs.existsSync(dir)) throw new Error(`Missing dataset partition directory: ${dir}`);
     const trips = fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, 'en'));
+    const expectedCount = partition === 'train' ? args.expectedTrain : args.expectedStudentTest;
+    if (expectedCount !== null && trips.length !== expectedCount) {
+      throw new Error(`Partition ${partition} has ${trips.length} trips; expected ${expectedCount}`);
+    }
     for (const entry of trips) {
       const trip = parseTrip(partition, path.join(dir, entry.name));
       const summary = tripSummary(trip);
@@ -426,6 +448,7 @@ function main() {
   }
   candidateStream.end();
   trainingStream.end();
+  await Promise.all([finished(candidateStream), finished(trainingStream)]);
   const aggregate = summaries.reduce((totals, row) => {
     for (const key of ['track_rows', 'nodes_rows', 'arcs_rows', 'route_rows', 'malformed_track_rows', 'malformed_nodes_rows', 'malformed_arcs_rows', 'malformed_route_rows', 'invalid_arc_node_references', 'invalid_route_arc_references']) {
       totals[key] += row[key] ?? 0;
@@ -466,7 +489,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   console.error(usage());

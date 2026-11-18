@@ -10,7 +10,13 @@ Run the dependency-free Node.js pipeline from the repository root:
 node scripts/build_data_pipeline.mjs
 ```
 
-The default input is `Data/Data`, with `train/` and `student_test/` trip folders. Override paths with `--data <directory>` and `--output <directory>`.
+The default input is `Data/Data`, with `train/` and `student_test/` trip folders. Override paths with `--data <directory>` and `--output <directory>`. Use `--expect-train 80 --expect-student-test 10` for a strict run against the supplied 80/10 partition split.
+
+Run the dependency-free privacy and output regression test:
+
+```powershell
+node scripts/test_data_pipeline.mjs
+```
 
 The pipeline expects one folder per trip, named by trip ID, with files named `<trip-id>.track`, `.nodes`, `.arcs`, and `.route`. It parses whitespace or comma separated numeric rows without headers:
 
@@ -46,4 +52,4 @@ The candidate feature contract is `pathsnap.candidates.v1`. A row contains `trip
 
 Labels are weak proxy labels: each training observation is independently matched to its nearest reference-route segment in metric coordinates, only when within 500 m. This does not imply temporal alignment or ground-truth GPS-to-road matching. Student-test route files are not opened by the script. Trip folds should remain grouped by `trip_id` during downstream training and evaluation. No evaluator-test data is included in this pipeline.
 
-Generated data and EDA artifacts are local outputs; keep the original dataset outside Git.
+Generated data and EDA artifacts are local outputs; keep the original dataset outside Git. The pipeline enumerates only `train/` and `student_test/`; it never enumerates, opens, parses, or emits `evaluator_test/` files or labels, and every artifact is safe to share without evaluator-test data.
