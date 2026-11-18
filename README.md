@@ -71,7 +71,10 @@ PowerShell example:
 ```powershell
 $env:PATHSNAP_DATA_ROOT="C:\\path\\to\\data"
 $env:PATHSNAP_UI_PARTITION="student_test"
-$env:PATHSNAP_PIPELINE_FACTORY="your_package.pipeline:create_pipeline"
+$env:PATHSNAP_PIPELINE_FACTORY="src.evaluator_pipeline:create_pipeline"
+$env:PATHSNAP_CLASSIFIER_ARTIFACT_DIR="C:\\path\\to\\artifacts\\classifier"
+$env:PATHSNAP_CANDIDATES_JSONL="C:\\path\\to\\artifacts\\data-pipeline\\candidates.jsonl"
+$env:PATHSNAP_HMM_PARAMS_PATH="C:\\path\\to\\configs\\hmm_params.json"
 $env:PATHSNAP_CORS_ORIGINS="http://localhost:8501"
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
@@ -100,7 +103,8 @@ the real `POST /predict` response; do not copy labels or metrics from a referenc
 - `GET /trips`: trip IDs in the configured partition.
 - `POST /predict`: JSON body `{"trip_id":"00000000"}`; runs the injected classifier/decoder and optional server-side evaluation hook. IDs are validated as exactly eight digits.
 
-A prediction request returns HTTP 503 until the real pipeline factory is configured. This is intentional: the scaffold does not generate dummy predictions.
+A prediction request returns HTTP 503 until the real pipeline factory and saved classifier
+artifact are configured. This is intentional: the evaluator does not generate dummy predictions.
 
 ## Evidence checklist
 

@@ -139,8 +139,10 @@ def predict(request: PredictionRequest) -> dict[str, Any]:
         # Reference route is supplied only to the server-side evaluation hook.
         metrics = {}
         if files["reference_route"].is_file() and hasattr(pipeline, "evaluate_prediction"):
+            evaluation_input = dict(prediction)
+            evaluation_input["trip_id"] = request.trip_id
             metrics = pipeline.evaluate_prediction(
-                prediction=prediction,
+                prediction=evaluation_input,
                 reference_route_path=files["reference_route"],
             )
         safe_prediction = _without_reference_labels(prediction)
