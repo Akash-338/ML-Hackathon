@@ -10,13 +10,11 @@ This module provides a unified loader for PathSnap / Ufa / Germany GPS trips:
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
-from pyproj import Transformer
 
 
 @dataclass
@@ -142,13 +140,20 @@ def load_trip_data(
     median_lat = float(np.median(nodes_lonlat[:, 1]))
     epsg = get_utm_epsg(median_lon, median_lat)
 
-    # Project coordinates: (lon, lat) -> (x, y) in meters
-    transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
-    nodes_x, nodes_y = transformer.transform(nodes_lonlat[:, 0], nodes_lonlat[:, 1])
-    nodes_xy = np.column_stack([nodes_x, nodes_y])
+    # Local equirectangular metric projection; this is accurate for a trip-local
+    # road-network region and avoids native geospatial runtime dependencies.
+    earth_radius_m = 6371008.8
+    origin_lon = float(np.median(nodes_lonlat[:, 0]))
+    origin_lat = float(np.median(nodes_lonlat[:, 1]))
+    cos_lat = np.cos(np.deg2rad(origin_lat))
 
-    gps_x, gps_y = transformer.transform(gps_lonlat[:, 0], gps_lonlat[:, 1])
-    gps_xy = np.column_stack([gps_x, gps_y])
+    def project(points: np.ndarray) -> np.ndarray:
+        x = np.deg2rad(points[:, 0] - origin_lon) * earth_radius_m * cos_lat
+        y = np.deg2rad(points[:, 1] - origin_lat) * earth_radius_m
+        return np.column_stack([x, y])
+
+    nodes_xy = project(nodes_lonlat)
+    gps_xy = project(gps_lonlat)
 
     return TripData(
         trip_id=trip_id,

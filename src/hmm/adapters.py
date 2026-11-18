@@ -13,6 +13,7 @@ Decoder Contract Expectation:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -115,3 +116,88 @@ def adapt_matrices_to_decoder(
         scores.append(s)
 
     return candidates, scores
+
+
+def load_candidate_jsonl_scores(
+    candidate_jsonl: Union[str, Path],
+    partition: str,
+    artifact_dir: Union[str, Path],
+    trip_ids: Optional[Sequence[str]] = None,
+) -> Dict[str, Tuple[List[np.ndarray], List[np.ndarray]]]:
+    """Load the upstream Issue #2 classifier output contract for decoder evaluation.
+
+    Reads `pathsnap.candidates.v1` JSONL, scores each candidate row with the saved
+    model artifact, and groups probabilities by trip and observation. Training and
+    student-test partitions only; evaluator-test paths and labels are rejected.
+    """
+    import json
+
+    import joblib
+    import pandas as pd
+
+    candidate_path = Path(candidate_jsonl)
+    path_text = str(candidate_path).replace("\\", "/").lower()
+    if partition not in {"train", "student_test"} or "evaluator_test" in path_text:
+        raise ValueError("Only train and student_test candidate partitions are permitted")
+
+    artifact_path = Path(artifact_dir)
+    model = joblib.load(artifact_path / "model.joblib")
+
+    allowed_trip_ids = set(trip_ids) if trip_ids is not None else None
+    rows: List[Dict[str, Any]] = []
+    with candidate_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("schema_version") != "pathsnap.candidates.v1":
+                raise ValueError("Unsupported candidate JSONL schema")
+            if row.get("partition") != partition:
+                continue
+            trip_id = str(row["trip_id"])
+            if allowed_trip_ids is not None and trip_id not in allowed_trip_ids:
+                continue
+            features = row.get("features")
+            if not isinstance(features, dict):
+                continue
+            flat = dict(row)
+            flat.update(features)
+            flat["candidate_rank"] = row.get("candidate_rank")
+            rows.append(flat)
+
+    if not rows:
+        raise ValueError(f"No candidate rows found for partition {partition}")
+
+    frame = pd.DataFrame(rows)
+    feature_names = (
+        "gps_to_arc_distance_m",
+        "gps_heading_difference_deg",
+        "arc_length_m",
+        "distance_from_arc_start_m",
+        "fraction_along_arc",
+        "time_delta_s",
+        "gps_speed_mps",
+        "candidate_rank",
+    )
+    for name in feature_names:
+        if name not in frame:
+            frame[name] = np.nan
+    feature_frame = frame[list(feature_names)].apply(pd.to_numeric, errors="coerce")
+    probabilities = model.predict_proba(feature_frame)
+    classes = list(getattr(model, "classes_", [0, 1]))
+    positive_index = classes.index(1) if 1 in classes else probabilities.shape[1] - 1
+    frame["probability"] = probabilities[:, positive_index]
+
+    grouped: Dict[str, Tuple[List[np.ndarray], List[np.ndarray]]] = {}
+    for trip_id in sorted(frame["trip_id"].astype(str).unique()):
+        trip_frame = frame[frame["trip_id"].astype(str) == trip_id]
+        max_observation = int(pd.to_numeric(trip_frame["observation_index"], errors="coerce").max())
+        candidates: List[np.ndarray] = [np.empty(0, dtype=np.int64) for _ in range(max_observation + 1)]
+        scores: List[np.ndarray] = [np.empty(0, dtype=np.float64) for _ in range(max_observation + 1)]
+        for observation_index, observation_frame in trip_frame.groupby("observation_index", sort=True):
+            observation_frame = observation_frame.sort_values("candidate_rank")
+            candidates[int(observation_index)] = observation_frame["candidate_arc_id"].to_numpy(dtype=np.int64)
+            scores[int(observation_index)] = observation_frame["probability"].to_numpy(dtype=np.float64)
+        grouped[trip_id] = (candidates, scores)
+
+    return grouped

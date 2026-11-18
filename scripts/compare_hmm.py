@@ -34,6 +34,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.hmm.dev_candidates import generate_dev_candidates
+from src.hmm.adapters import load_candidate_jsonl_scores
 from src.hmm.evaluate import align_gps_to_route, evaluate_trip
 from src.hmm.loader import TripData, load_trip_data
 from src.hmm.network import RoadNetwork
@@ -64,10 +65,17 @@ def setup_logger(log_file: Path) -> logging.Logger:
 def run_single_trip_eval(
     trip: TripData,
     params: HMMParams,
+    classifier_candidates: Tuple[List[np.ndarray], List[np.ndarray]] | None = None,
 ) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray, np.ndarray]:
     """Run classifier-only and HMM on a trip and compute all metrics."""
     network = RoadNetwork(trip.nodes_xy, trip.arcs)
-    cands, scores = generate_dev_candidates(trip.gps_xy, network, k=15)
+    if classifier_candidates is None:
+        cands, scores = generate_dev_candidates(trip.gps_xy, network, k=15)
+    else:
+        cands, scores = classifier_candidates
+        if len(cands) < len(trip.gps_xy):
+            cands = cands + [np.empty(0, dtype=np.int64)] * (len(trip.gps_xy) - len(cands))
+            scores = scores + [np.empty(0, dtype=np.float64)] * (len(trip.gps_xy) - len(scores))
 
     # 1. Classifier-only argmax top-1
     t0 = time.time()
@@ -119,6 +127,7 @@ def tune_hyperparameters(
     train_trips: List[TripData],
     logger: logging.Logger,
     n_splits: int = 3,
+    classifier_scores: Dict[str, Tuple[List[np.ndarray], List[np.ndarray]]] | None = None,
 ) -> HMMParams:
     """Tune HMMParams via Group-aware Cross-Validation on training trips."""
     logger.info("Starting Group-aware Cross Validation for HMMParams on TRAIN...")
@@ -147,7 +156,10 @@ def tune_hyperparameters(
     cached_trips = []
     for tr in train_trips:
         net = RoadNetwork(tr.nodes_xy, tr.arcs)
-        cands, scs = generate_dev_candidates(tr.gps_xy, net, k=15)
+        if classifier_scores is None:
+            cands, scs = generate_dev_candidates(tr.gps_xy, net, k=15)
+        else:
+            cands, scs = classifier_scores[tr.trip_id]
         ref = align_gps_to_route(tr.gps_xy, tr.route, net) if tr.route is not None else None
         cached_trips.append((tr, net, cands, scs, ref))
 
@@ -205,6 +217,8 @@ def main():
     parser.add_argument("--num-train-tune", type=int, default=15, help="Number of train trips to use for CV tuning")
     parser.add_argument("--results-dir", type=str, default="results/hmm", help="Results directory")
     parser.add_argument("--configs-dir", type=str, default="configs", help="Configs directory")
+    parser.add_argument("--candidate-jsonl", type=str, default="", help="Permitted candidate JSONL for real classifier scores")
+    parser.add_argument("--classifier-artifacts", type=str, default="", help="Issue #2 classifier artifact directory")
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
@@ -234,9 +248,26 @@ def main():
     tune_ids = all_train_ids[:args.num_train_tune]
     logger.info(f"Loading {len(tune_ids)} train trips for Group-CV hyperparameter tuning: {tune_ids}")
     train_trips = [load_trip_data(tid, train_dir) for tid in tune_ids]
+    all_train_trips = [load_trip_data(tid, train_dir) for tid in all_train_ids]
+
+    train_classifier_scores = None
+    test_classifier_scores = None
+    if args.candidate_jsonl and args.classifier_artifacts:
+        logger.info("Loading real classifier probabilities from the upstream candidate/model contract")
+        train_classifier_scores = load_candidate_jsonl_scores(
+            args.candidate_jsonl,
+            "train",
+            args.classifier_artifacts,
+            trip_ids=all_train_ids,
+        )
 
     # 2. Hyperparameter Tuning via GroupKFold CV
-    best_params = tune_hyperparameters(train_trips, logger, n_splits=3)
+    best_params = tune_hyperparameters(
+        train_trips,
+        logger,
+        n_splits=3,
+        classifier_scores=train_classifier_scores,
+    )
 
     # Save best parameters to configs/hmm_params.json and results/hmm/best_params.json
     best_params.to_json(configs_dir / "hmm_params.json")
@@ -255,14 +286,30 @@ def main():
         if d.is_dir() and (d / f"{d.name}.track").exists()
     ])
     logger.info(f"Found {len(test_ids)} student_test trips in {test_dir}: {test_ids}")
+    if args.candidate_jsonl and args.classifier_artifacts:
+        test_classifier_scores = load_candidate_jsonl_scores(
+            args.candidate_jsonl,
+            "student_test",
+            args.classifier_artifacts,
+            trip_ids=test_ids,
+        )
 
     all_records: List[Dict[str, Any]] = []
     helped_hurt_records: List[Dict[str, Any]] = []
 
     # Evaluate tuning train subset
-    logger.info("--- Evaluating Train Subset ---")
-    for tr in train_trips:
-        rec, top1_arcs, hmm_arcs, ref_arcs = run_single_trip_eval(tr, best_params)
+    logger.info("--- Evaluating All 80 Training Trips ---")
+    for tr in all_train_trips:
+        classifier_candidates = (
+            train_classifier_scores[tr.trip_id]
+            if train_classifier_scores is not None
+            else None
+        )
+        rec, top1_arcs, hmm_arcs, ref_arcs = run_single_trip_eval(
+            tr,
+            best_params,
+            classifier_candidates,
+        )
         rec["split"] = "train"
         all_records.append(rec)
 
@@ -287,7 +334,16 @@ def main():
     logger.info("--- Evaluating Student Test Set ---")
     for tid in test_ids:
         tr = load_trip_data(tid, test_dir)
-        rec, top1_arcs, hmm_arcs, ref_arcs = run_single_trip_eval(tr, best_params)
+        classifier_candidates = (
+            test_classifier_scores[tid]
+            if test_classifier_scores is not None
+            else None
+        )
+        rec, top1_arcs, hmm_arcs, ref_arcs = run_single_trip_eval(
+            tr,
+            best_params,
+            classifier_candidates,
+        )
         rec["split"] = "student_test"
         all_records.append(rec)
 
