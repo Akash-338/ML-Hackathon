@@ -40,6 +40,7 @@ def create_trip_map(
     params_path: Optional[str] = "configs/hmm_params.json",
     candidate_jsonl: Optional[str] = None,
     classifier_artifacts: Optional[str] = None,
+    prediction_npz: Optional[str] = None,
 ) -> Path:
     """Generate and save an interactive Folium map for a single trip."""
     # 1. Load trip data
@@ -48,7 +49,20 @@ def create_trip_map(
 
     # 2. Generate candidates and predictions
     params = HMMParams.from_json(params_path) if params_path and Path(params_path).exists() else HMMParams()
-    if candidate_jsonl and classifier_artifacts:
+    prediction_loaded = bool(prediction_npz and Path(prediction_npz).exists())
+    if prediction_npz and Path(prediction_npz).exists():
+        prediction = np.load(prediction_npz)
+        top1_arcs = prediction["top1_arc_ids"].astype(np.int64)
+        hmm_arcs = prediction["hmm_arc_ids"].astype(np.int64)
+        candidates = [
+            np.array([int(a)], dtype=np.int64) if int(a) >= 0 else np.empty(0, dtype=np.int64)
+            for a in top1_arcs
+        ]
+        scores = [
+            np.array([1.0], dtype=np.float64) if int(a) >= 0 else np.empty(0, dtype=np.float64)
+            for a in top1_arcs
+        ]
+    elif candidate_jsonl and classifier_artifacts:
         partition = "student_test" if data_dir and "student_test" in str(data_dir).lower() else "train"
         scored = load_candidate_jsonl_scores(
             candidate_jsonl,
@@ -63,15 +77,16 @@ def create_trip_map(
     else:
         candidates, scores = generate_dev_candidates(trip.gps_xy, network, k=15)
 
-    # Classifier Top-1
-    top1_arcs = np.array([
-        candidates[t][int(np.argmax(scores[t]))] if len(candidates[t]) > 0 else -1
-        for t in range(len(candidates))
-    ], dtype=np.int64)
+    if not prediction_loaded:
+        # Classifier Top-1
+        top1_arcs = np.array([
+            candidates[t][int(np.argmax(scores[t]))] if len(candidates[t]) > 0 else -1
+            for t in range(len(candidates))
+        ], dtype=np.int64)
 
-    # HMM Viterbi
-    hmm_res = decode_trip(trip.timestamps, trip.gps_xy, candidates, scores, network, params)
-    hmm_arcs = hmm_res.pred_arc_ids
+        # HMM Viterbi
+        hmm_res = decode_trip(trip.timestamps, trip.gps_xy, candidates, scores, network, params)
+        hmm_arcs = hmm_res.pred_arc_ids
 
     # 3. Initialize Folium Map centered on median GPS (lat, lon)
     # Recall: gps_lonlat is [lon, lat], so folium center is [lat, lon]
@@ -221,6 +236,7 @@ def main():
     parser.add_argument("--params", type=str, default="configs/hmm_params.json", help="Path to hmm_params.json")
     parser.add_argument("--candidate-jsonl", type=str, default=None, help="Permitted candidate JSONL")
     parser.add_argument("--classifier-artifacts", type=str, default=None, help="Classifier model artifact directory")
+    parser.add_argument("--prediction-npz", type=str, default=None, help="Saved real comparison predictions")
     args = parser.parse_args()
 
     out_file = create_trip_map(
@@ -230,6 +246,7 @@ def main():
         params_path=args.params,
         candidate_jsonl=args.candidate_jsonl,
         classifier_artifacts=args.classifier_artifacts,
+        prediction_npz=args.prediction_npz,
     )
     print(f"Map successfully generated at: {out_file}")
 
