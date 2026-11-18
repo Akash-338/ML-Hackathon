@@ -1,0 +1,3 @@
+[2026-11-18 14:41:27,963][INFO] Using 80 training trips and 1666880 candidate rows
+[2026-11-18 14:41:27,992][INFO] Using 10 student-test trips; route/ground-truth labels are not read
+[2026-11-18 14:46:16,970][INFO] Model logistic_regression: macro_f1=0.6752 top1=1.0000 log_loss=0.48516671332689265
