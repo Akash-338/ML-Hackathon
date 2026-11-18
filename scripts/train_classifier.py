@@ -26,7 +26,6 @@ from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifie
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    accuracy_score,
     f1_score,
     log_loss,
     make_scorer,
@@ -57,6 +56,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--bayesian-trials", type=int, default=30)
     parser.add_argument("--disable-bayesian", action="store_true")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use a deterministic capped sample and lightweight model settings for a quick smoke run.",
+    )
+    parser.add_argument(
+        "--max-train-rows",
+        type=int,
+        default=100_000,
+        help="Maximum candidate rows used in --fast mode.",
+    )
     return parser.parse_args()
 
 
@@ -119,11 +129,45 @@ def feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return frame[list(FEATURE_NAMES)].apply(pd.to_numeric, errors="coerce")
 
 
-def make_models() -> Dict[str, Pipeline]:
+def cap_training_rows(frame: pd.DataFrame, max_rows: int) -> pd.DataFrame:
+    """Deterministically cap rows while keeping each sampled observation whole."""
+    if max_rows <= 0 or len(frame) <= max_rows:
+        return frame
+    trip_ids = frame["trip_id"].astype(str).unique()
+    observations = (
+        frame.groupby(["trip_id", "observation_index"], sort=False)
+        .size()
+        .rename("candidate_count")
+        .reset_index()
+    )
+    rng = np.random.RandomState(SEED)
+    selected_observations: list[tuple[str, int]] = []
+    base_budget, remainder = divmod(max_rows, len(trip_ids))
+    for trip_index, trip_id in enumerate(trip_ids):
+        trip_observations = observations[observations["trip_id"].astype(str) == trip_id]
+        order = rng.permutation(len(trip_observations))
+        budget = base_budget + (1 if trip_index < remainder else 0)
+        used = 0
+        for position in order:
+            row = trip_observations.iloc[position]
+            candidate_count = int(row["candidate_count"])
+            if used + candidate_count > budget:
+                continue
+            selected_observations.append((trip_id, int(row["observation_index"])))
+            used += candidate_count
+    row_keys = pd.MultiIndex.from_frame(frame[["trip_id", "observation_index"]])
+    keep = row_keys.isin(selected_observations)
+    return frame.loc[keep].copy()
+
+
+def make_models(fast: bool = False) -> Dict[str, Pipeline]:
     preprocessor = [
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
     ]
+    forest_estimators = 50 if fast else 300
+    hist_iterations = 50 if fast else 200
+    knn_neighbors = 5 if fast else 15
     return {
         "logistic_regression": Pipeline(
             preprocessor
@@ -142,7 +186,7 @@ def make_models() -> Dict[str, Pipeline]:
         ),
         "knn": Pipeline(
             preprocessor
-            + [("model", KNeighborsClassifier(n_neighbors=15, weights="distance", p=2))]
+            + [("model", KNeighborsClassifier(n_neighbors=knn_neighbors, weights="distance", p=2))]
         ),
         "random_forest": Pipeline(
             [
@@ -150,8 +194,8 @@ def make_models() -> Dict[str, Pipeline]:
                 (
                     "model",
                     RandomForestClassifier(
-                        n_estimators=300,
-                        max_depth=None,
+                        n_estimators=forest_estimators,
+                        max_depth=12 if fast else None,
                         min_samples_leaf=1,
                         class_weight="balanced_subsample",
                         random_state=SEED,
@@ -166,8 +210,8 @@ def make_models() -> Dict[str, Pipeline]:
                 (
                     "model",
                     ExtraTreesClassifier(
-                        n_estimators=300,
-                        max_depth=None,
+                        n_estimators=forest_estimators,
+                        max_depth=12 if fast else None,
                         min_samples_leaf=1,
                         class_weight="balanced",
                         random_state=SEED,
@@ -183,8 +227,8 @@ def make_models() -> Dict[str, Pipeline]:
                     "model",
                     HistGradientBoostingClassifier(
                         learning_rate=0.08,
-                        max_iter=200,
-                        max_leaf_nodes=31,
+                        max_iter=hist_iterations,
+                        max_leaf_nodes=15 if fast else 31,
                         l2_regularization=1.0,
                         random_state=SEED,
                     ),
@@ -214,7 +258,9 @@ def observation_metrics(frame: pd.DataFrame, probability: np.ndarray) -> Dict[st
         .head(1)
     )
     labels = pd.to_numeric(top_rows["label"], errors="coerce")
-    top1 = float(accuracy_score(labels.fillna(0).astype(int), (labels == 1).astype(int))) if len(labels) else 0.0
+    # Every observation's highest-scored candidate is the predicted arc. It is
+    # correct when that row carries the positive route-match proxy label.
+    top1 = float((labels.fillna(0).astype(int) == 1).mean()) if len(labels) else 0.0
     missed = 0
     total_observations = 0
     for _, group in scored.groupby(["trip_id", "observation_index"], sort=False):
@@ -417,6 +463,17 @@ def main() -> int:
     train["label"] = train["label"].astype(int)
     if set(train["label"].unique()) != {0, 1}:
         raise ValueError("Training labels must contain both positive and negative candidates.")
+    if args.fast:
+        args.cv_folds = min(args.cv_folds, 2)
+        args.disable_bayesian = True
+        train = cap_training_rows(train, args.max_train_rows)
+        if set(train["label"].unique()) != {0, 1}:
+            raise ValueError("Fast-mode sampling removed one of the label classes.")
+        logger.info(
+            "Fast mode: capped training data to %d candidate rows across %d trips",
+            len(train),
+            train["trip_id"].nunique(),
+        )
     if train["trip_id"].nunique() < args.cv_folds:
         raise ValueError("At least cv_folds distinct training trip IDs are required.")
 
@@ -428,7 +485,7 @@ def main() -> int:
     X_train = feature_frame(train)
     y_train = train["label"].to_numpy(dtype=int)
 
-    for model_name, model in make_models().items():
+    for model_name, model in make_models(fast=args.fast).items():
         cv_record = cross_validate(model_name, model, train, args.cv_folds)
         comparison_records.append(cv_record)
         fitted = clone(model)
@@ -639,7 +696,7 @@ def main() -> int:
         json.dumps(
             {
                 "selected_model": best_name,
-                "selection_rule": "Highest 5-fold trip-grouped out-of-fold Macro F1; ties favor Top-1 accuracy.",
+                "selection_rule": f"Highest {args.cv_folds}-fold trip-grouped out-of-fold Macro F1; ties favor Top-1 accuracy.",
                 "cv_result": next(r for r in comparison_records if r["model"] == best_name),
                 "student_test_note": "Only unlabeled candidate coverage/predictions are reported; no student-test route labels are opened.",
                 "plots": plots,

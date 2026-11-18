@@ -112,8 +112,8 @@ $$\log P_{\text{trans}}(s_t = b \mid s_{t-1} = a) = \begin{cases}
 -P_{\text{invalid}} & \text{if } b \text{ is unreachable / disconnected}
 \end{cases}$$
 Where:
-- $\beta$ is `beta` (meters scale factor, tuned to $30.0$).
-- $P_{\text{invalid}}$ is `invalid_transition_penalty` (soft penalty, tuned to $80.0$).
+- $\beta$ is `beta` (meters scale factor, tuned to $10.0$ for the latest real-classifier run).
+- $P_{\text{invalid}}$ is `invalid_transition_penalty` (soft penalty, tuned to $50.0$ for the latest real-classifier run).
 - **Crucial Design Choice:** We use a finite soft penalty rather than $-\infty$. If GPS noise or map incompleteness breaks connectivity, the decoder degrades gracefully rather than failing or dropping observations.
 
 ### 3.4 Vectorized Viterbi Recurrence
@@ -167,45 +167,38 @@ $$\text{backpointer}[j] = \text{argmax}(\text{incoming}[:, j]), \quad V_t = \max
 
 ---
 
-## 7. Development Stand-In Results (Student Test Set)
+## 7. Latest Real-Classifier Results (Student Test Set)
 
-> **Reproducibility/status note:** The checked-in metrics were produced with
-> `src/hmm/dev_candidates.py`, a distance-based development stand-in. They are
-> not evidence from the upstream classifier implementation. The comparison script
-> becomes a real classifier-vs-HMM benchmark when upstream candidate and score
-> artifacts are supplied; it never reads `evaluator_test` labels or data.
-
-The checked-in metrics below are a stand-in execution snapshot from
-`scripts/compare_hmm.py` using `src/hmm/dev_candidates.py`, not upstream
-classifier scores. See `results/hmm/provenance.json` and
-`results/hmm/standin_summary.json`. A real-classifier comparison requires the
-per-trip candidate JSONL and `model.joblib`; those artifacts were unavailable
-in this worktree. The script never reads `evaluator_test` labels.
+This run uses the saved Histogram Gradient Boosting classifier and candidate probabilities
+from the Issue #2 interface. The classifier was trained in fast mode on a deterministic
+100,000-row sample with 2-fold trip-grouped CV; HMM parameters were tuned on the first
+five training trips. The reported student-test scores use student-test `.route` files
+for offline evaluation. The `evaluator_test` partition was not accessed. Run provenance
+is recorded in `results/hmm/provenance.json`.
 
 | Trip ID | Points | Top-1 Acc | HMM Acc | $\Delta$ Acc | Top-1 Cont | HMM Cont | $\Delta$ Cont | Miss Rate | HMM Time | Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `00000000` | 2,503 | 49.5% | **93.9%** | **+44.5%** | 79.0% | **93.0%** | +14.0% | 0.0% | 0.72s | **helped** |
-| `00000007` | 1,354 | 44.8% | **97.1%** | **+52.3%** | 79.8% | **100.0%** | +20.2% | 0.0% | 0.19s | **helped** |
-| `00000009` | 1,049 | 46.6% | **82.8%** | **+36.2%** | 46.5% | **84.0%** | +37.5% | 0.0% | 0.84s | **helped** |
-| `00000040` | 2,995 | 55.2% | **95.8%** | **+40.6%** | 75.3% | **95.2%** | +19.9% | 0.0% | 0.74s | **helped** |
-| `00000052` | 262 | 81.3% | **89.3%** | **+8.0%** | 52.0% | **84.6%** | +32.6% | 0.0% | 0.21s | **helped** |
-| `00000056` | 3,958 | 77.8% | **76.7%** | -1.0% | 51.6% | **87.9%** | **+36.3%** | 0.6% | 1.91s | **helped\*** |
-| `00000065` | 768 | 77.2% | **79.7%** | **+2.5%** | 52.6% | **85.4%** | +32.8% | 0.0% | 0.64s | **helped** |
-| `00000076` | 1,486 | 46.0% | **80.7%** | **+34.7%** | 54.4% | **82.6%** | +28.2% | 0.0% | 1.52s | **helped** |
-| `00000077` | 3,911 | 43.0% | **78.2%** | **+35.2%** | 70.5% | **89.9%** | +19.4% | 0.0% | 1.69s | **helped** |
-| `00000091` | 874 | 62.1% | **87.1%** | **+24.9%** | 49.3% | **87.2%** | +37.9% | 0.0% | 0.85s | **helped** |
-| **Mean** | **19,160** | **58.35%** | **86.14%** | **+27.79%** | **61.11%** | **88.98%** | **+27.87%** | **0.06%** | **0.931s** | **9 / 10 Helped** |
-
-*\*Note on Trip 00000056: Accuracy changed by -1.0% due to minor junction projection ties, while route continuity rose massively from 51.6% to 87.9% (+36.3%), completely eliminating discontinuous classifier jumps.*
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| `00000000` | 2,503 | 92.2% | 81.9% | -10.3% | 69.4% | 81.5% | +12.1% | 0.20% | 0.52s | hurt |
+| `00000007` | 1,354 | 88.8% | 80.9% | -7.9% | 94.9% | 98.4% | +3.5% | 0.00% | 0.26s | hurt |
+| `00000009` | 1,049 | 83.2% | 91.4% | +8.2% | 68.8% | 83.3% | +14.5% | 0.95% | 0.37s | helped |
+| `00000040` | 2,995 | 86.7% | 88.9% | +2.2% | 80.8% | 92.4% | +11.5% | 0.00% | 0.64s | helped |
+| `00000052` | 262 | 93.1% | 96.2% | +3.1% | 79.5% | 85.7% | +6.2% | 0.00% | 0.07s | helped |
+| `00000056` | 3,958 | 80.5% | 80.8% | +0.3% | 67.2% | 88.2% | +21.0% | 0.05% | 0.75s | helped |
+| `00000065` | 768 | 75.5% | 82.8% | +7.3% | 67.3% | 85.8% | +18.5% | 0.13% | 0.19s | helped |
+| `00000076` | 1,486 | 77.3% | 91.5% | +14.1% | 62.2% | 84.1% | +21.8% | 0.67% | 0.43s | helped |
+| `00000077` | 3,911 | 62.0% | 74.7% | +12.8% | 79.4% | 91.7% | +12.3% | 0.13% | 0.63s | helped |
+| `00000091` | 874 | 81.7% | 89.1% | +7.4% | 62.8% | 85.5% | +22.6% | 0.00% | 0.18s | helped |
+| **Mean per trip** | **19,160** | **82.11%** | **85.82%** | **+3.71 pp** | **73.25%** | **87.66%** | **+14.41 pp** | **0.21%** | **0.404s** | **8 helped / 2 hurt** |
 
 ---
 
 ## 8. Optimal Tuned Hyperparameters
 
-Tuned via 3-Fold GroupKFold CV on stand-in candidate scores:
-- `beta`: `30.0`
-- `emission_weight`: `1.0`
-- `invalid_transition_penalty`: `80.0`
+Tuned via 3-fold GroupKFold CV on five training trips using real classifier candidate
+probabilities. The best grid score was 0.8685. Parameters:
+- `beta`: `10.0`
+- `emission_weight`: `0.5`
+- `invalid_transition_penalty`: `50.0`
 - `max_hops`: `5`
 - `max_meters`: `2000.0`
 - `gap_threshold_s`: `15.0`

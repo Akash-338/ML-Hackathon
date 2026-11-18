@@ -46,7 +46,7 @@ def _partition_root() -> Path:
     partition = os.getenv("PATHSNAP_UI_PARTITION", "student_test")
     if partition not in ALLOWED_PARTITIONS:
         raise HTTPException(status_code=500, detail="PATHSNAP_UI_PARTITION must be student_test or evaluator_test")
-    return Path(os.getenv("PATHSNAP_DATA_ROOT", "data")) / partition
+    return Path(os.getenv("PATHSNAP_DATA_ROOT", "Data/Data")) / partition
 
 
 def _partition_name() -> str:
@@ -106,6 +106,36 @@ def list_trips() -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=f"Dataset partition directory is missing: {root}")
     trips = sorted(p.name for p in root.iterdir() if p.is_dir() and p.name.isdigit())
     return {"partition": _partition_name(), "trip_ids": trips}
+
+@app.get("/trips/{trip_id}/map-data")
+def trip_map_data(trip_id: str) -> dict[str, Any]:
+    """Return GPS and road geometry for map rendering; never return reference routes."""
+    files = _trip_files(trip_id)
+    import numpy as np
+
+    track = np.atleast_2d(np.loadtxt(files["track"], dtype=np.float64))
+    nodes = np.atleast_2d(np.loadtxt(files["nodes"], dtype=np.float64))[:, :2]
+    arcs = np.atleast_2d(np.loadtxt(files["arcs"], dtype=np.int64))[:, :2]
+    gps = track[:, :2]
+    # Clip the graph to a modest margin around the GPS bounding box before sending
+    # it to the browser; some trips have hundreds of thousands of network arcs.
+    margin = 0.02
+    lo = gps.min(axis=0) - margin
+    hi = gps.max(axis=0) + margin
+    valid_nodes = (nodes[:, 0] >= lo[0]) & (nodes[:, 0] <= hi[0]) & (nodes[:, 1] >= lo[1]) & (nodes[:, 1] <= hi[1])
+    visible = valid_nodes[arcs[:, 0]] & valid_nodes[arcs[:, 1]]
+    arc_ids = np.flatnonzero(visible)
+    if len(arc_ids) > 12000:
+        # Deterministic thinning keeps the map responsive while preserving coverage.
+        arc_ids = arc_ids[:: int(np.ceil(len(arc_ids) / 12000))]
+    return {
+        "trip_id": trip_id,
+        "gps": gps.tolist(),
+        "timestamps": track[:, 2].tolist(),
+        "nodes": nodes.tolist(),
+        "arcs": arcs[arc_ids].tolist(),
+        "arc_ids": arc_ids.tolist(),
+    }
 
 
 def _without_reference_labels(value: Any) -> Any:
