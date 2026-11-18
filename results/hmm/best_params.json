@@ -1,0 +1,9 @@
+{
+  "beta": 30.0,
+  "emission_weight": 1.0,
+  "invalid_transition_penalty": 80.0,
+  "max_hops": 5,
+  "max_meters": 2000.0,
+  "gap_threshold_s": 15.0,
+  "eps": 1e-06
+}
