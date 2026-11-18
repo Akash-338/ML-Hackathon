@@ -22,8 +22,6 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 import numpy as np
-import shapely
-
 from .network import RoadNetwork
 
 
@@ -52,59 +50,34 @@ def generate_dev_candidates(
     if T == 0 or network.num_arcs == 0:
         return [], []
 
-    # 1. Build shapely LineStrings for all arcs
-    from_pts = network.nodes_xy[network.arcs[:, 0]]
-    to_pts = network.nodes_xy[network.arcs[:, 1]]
-    line_coords = np.stack([from_pts, to_pts], axis=1)
-    arc_lines = shapely.linestrings(line_coords)
-
-    # 2. Build spatial STRtree index
-    tree = shapely.STRtree(arc_lines)
-
-    # 3. Create shapely Points for GPS observations
-    gps_pts = shapely.points(gps_xy)
-
-    # 4. Range query using buffers
-    buffered_pts = shapely.buffer(gps_pts, search_radius)
-    pt_indices, arc_indices = tree.query(buffered_pts)
-
-    # Group candidate arcs by point index
-    grouped_arcs: List[List[int]] = [[] for _ in range(T)]
-    for p_idx, a_idx in zip(pt_indices, arc_indices):
-        grouped_arcs[p_idx].append(int(a_idx))
-
     candidates: List[np.ndarray] = []
     scores: List[np.ndarray] = []
+    from_pts = network.nodes_xy[network.arcs[:, 0]]
+    to_pts = network.nodes_xy[network.arcs[:, 1]]
+    segment = to_pts - from_pts
+    lengths_sq = np.sum(segment * segment, axis=1)
 
-    for t in range(T):
-        arc_list = grouped_arcs[t]
-
-        # If no arcs found within search_radius, fall back to single nearest arc
-        if len(arc_list) == 0:
-            nearest_match = tree.query_nearest(gps_pts[t])
-            # nearest_match can be [pt_idx, geom_idx] or just [geom_idx]
-            if isinstance(nearest_match, np.ndarray) and nearest_match.ndim == 2:
-                arc_list = [int(nearest_match[1, 0])]
-            elif isinstance(nearest_match, np.ndarray) and nearest_match.ndim == 1:
-                arc_list = [int(nearest_match[0])]
-            else:
-                arc_list = [int(nearest_match)]
-
-        # Unique arc IDs
-        unique_arcs = np.unique(arc_list)
-
-        # Compute exact point-to-segment distances
-        candidate_geoms = arc_lines[unique_arcs]
-        dists = shapely.distance(gps_pts[t], candidate_geoms)
-
-        # Sort by distance and take top K
+    for t, point in enumerate(gps_xy):
+        fractions = np.zeros(network.num_arcs, dtype=np.float64)
+        nonzero = lengths_sq > 0
+        fractions[nonzero] = np.sum(
+            (point - from_pts[nonzero]) * segment[nonzero],
+            axis=1,
+        ) / lengths_sq[nonzero]
+        fractions = np.clip(fractions, 0.0, 1.0)
+        projected = from_pts + fractions[:, np.newaxis] * segment
+        dists = np.linalg.norm(point - projected, axis=1)
+        within_radius = dists <= search_radius
+        unique_arcs = np.flatnonzero(within_radius)
+        if len(unique_arcs) == 0:
+            unique_arcs = np.array([int(np.argmin(dists))], dtype=np.int64)
         if len(unique_arcs) > k:
-            top_k_indices = np.argsort(dists)[:k]
+            top_k_indices = np.argsort(dists[unique_arcs])[:k]
             unique_arcs = unique_arcs[top_k_indices]
-            dists = dists[top_k_indices]
+            dists = dists[unique_arcs]
+        else:
+            dists = dists[unique_arcs]
 
-        # Convert distances to softmax probabilities: P ~ exp(-dist / sigma)
-        # Shift logits for numerical stability
         logits = -dists / max(sigma, 1e-3)
         logits_shifted = logits - np.max(logits)
         exp_logits = np.exp(logits_shifted)

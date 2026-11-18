@@ -248,6 +248,7 @@ def main():
     tune_ids = all_train_ids[:args.num_train_tune]
     logger.info(f"Loading {len(tune_ids)} train trips for Group-CV hyperparameter tuning: {tune_ids}")
     train_trips = [load_trip_data(tid, train_dir) for tid in tune_ids]
+    all_train_trips = [load_trip_data(tid, train_dir) for tid in all_train_ids]
 
     train_classifier_scores = None
     test_classifier_scores = None
@@ -257,7 +258,7 @@ def main():
             args.candidate_jsonl,
             "train",
             args.classifier_artifacts,
-            trip_ids=tune_ids,
+            trip_ids=all_train_ids,
         )
 
     # 2. Hyperparameter Tuning via GroupKFold CV
@@ -297,8 +298,8 @@ def main():
     helped_hurt_records: List[Dict[str, Any]] = []
 
     # Evaluate tuning train subset
-    logger.info("--- Evaluating Train Subset ---")
-    for tr in train_trips:
+    logger.info("--- Evaluating All 80 Training Trips ---")
+    for tr in all_train_trips:
         classifier_candidates = (
             train_classifier_scores[tr.trip_id]
             if train_classifier_scores is not None
