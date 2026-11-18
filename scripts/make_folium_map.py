@@ -27,6 +27,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.hmm.dev_candidates import generate_dev_candidates
+from src.hmm.adapters import load_candidate_jsonl_scores
 from src.hmm.loader import load_trip_data
 from src.hmm.network import RoadNetwork
 from src.hmm.viterbi import HMMParams, decode_trip
@@ -37,6 +38,8 @@ def create_trip_map(
     data_dir: Optional[str] = None,
     output_dir: str = "results/hmm/maps",
     params_path: Optional[str] = "configs/hmm_params.json",
+    candidate_jsonl: Optional[str] = None,
+    classifier_artifacts: Optional[str] = None,
 ) -> Path:
     """Generate and save an interactive Folium map for a single trip."""
     # 1. Load trip data
@@ -45,7 +48,20 @@ def create_trip_map(
 
     # 2. Generate candidates and predictions
     params = HMMParams.from_json(params_path) if params_path and Path(params_path).exists() else HMMParams()
-    candidates, scores = generate_dev_candidates(trip.gps_xy, network, k=15)
+    if candidate_jsonl and classifier_artifacts:
+        partition = "student_test" if data_dir and "student_test" in str(data_dir).lower() else "train"
+        scored = load_candidate_jsonl_scores(
+            candidate_jsonl,
+            partition,
+            classifier_artifacts,
+            trip_ids=[trip_id],
+        )
+        candidates, scores = scored[trip_id]
+        if len(candidates) < len(trip.gps_xy):
+            candidates = candidates + [np.empty(0, dtype=np.int64)] * (len(trip.gps_xy) - len(candidates))
+            scores = scores + [np.empty(0, dtype=np.float64)] * (len(trip.gps_xy) - len(scores))
+    else:
+        candidates, scores = generate_dev_candidates(trip.gps_xy, network, k=15)
 
     # Classifier Top-1
     top1_arcs = np.array([
@@ -203,6 +219,8 @@ def main():
     parser.add_argument("--data-dir", type=str, default=None, help="Optional trip directory")
     parser.add_argument("--output-dir", type=str, default="results/hmm/maps", help="Output directory")
     parser.add_argument("--params", type=str, default="configs/hmm_params.json", help="Path to hmm_params.json")
+    parser.add_argument("--candidate-jsonl", type=str, default=None, help="Permitted candidate JSONL")
+    parser.add_argument("--classifier-artifacts", type=str, default=None, help="Classifier model artifact directory")
     args = parser.parse_args()
 
     out_file = create_trip_map(
@@ -210,6 +228,8 @@ def main():
         data_dir=args.data_dir,
         output_dir=args.output_dir,
         params_path=args.params,
+        candidate_jsonl=args.candidate_jsonl,
+        classifier_artifacts=args.classifier_artifacts,
     )
     print(f"Map successfully generated at: {out_file}")
 

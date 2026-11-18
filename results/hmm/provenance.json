@@ -1,9 +1,9 @@
 {
-  "evaluation_source": "dev_distance_standin",
-  "candidate_generator": "src.hmm.dev_candidates.generate_dev_candidates",
-  "real_classifier_evaluation": false,
+  "evaluation_source": "upstream_classifier_model_plus_hmm",
+  "candidate_generator": "src.hmm.adapters.load_candidate_jsonl_scores",
+  "real_classifier_evaluation": true,
   "evaluator_test_accessed": false,
-  "train_dir": "data/train",
-  "student_test_dir": "data/student_test",
-  "notes": "Checked-in metrics are a development stand-in snapshot. No upstream model.joblib or candidate JSONL was available."
+  "train_dir": "E:\\PES\\Projects\\ML-Hackathon\\Data\\Data\\train",
+  "student_test_dir": "E:\\PES\\Projects\\ML-Hackathon\\Data\\Data\\student_test",
+  "notes": "Scores were produced by the permitted logistic classifier artifact from pathsnap.candidates.v1 train/student-test JSONL."
 }
