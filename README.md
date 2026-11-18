@@ -28,7 +28,9 @@ The API defaults to `student_test` for development. Use `evaluator_test` only in
 
 ## Pipeline integration contract
 
-Coordinate the exact model/artifact interface with Akash S and the decoder interface with Anand. Expose a factory configured by `PATHSNAP_PIPELINE_FACTORY=your_package.pipeline:create_pipeline`.
+Coordinate the exact model/artifact interface with Akash S and the decoder interface with Anand. Expose a factory configured by `PATHSNAP_PIPELINE_FACTORY=your_package.pipeline:create_pipeline`. The factory is deliberately mandatory: this repository does not ship a dummy model or generated predictions.
+
+The factory should load the saved classifier/preprocessing artifacts and Anand's HMM parameters from paths supplied by its own configuration (for example, `PATHSNAP_MODEL_PATH`, `PATHSNAP_PREPROCESSOR_PATH`, and `PATHSNAP_HMM_PARAMS_PATH`). Keep those files outside git when they are large or private. The adapter must be importable from the API laptop's environment before starting Uvicorn.
 
 The returned object must implement:
 
@@ -87,20 +89,31 @@ streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8501
 
 Open `http://localhost:8501` on Laptop 2. Ensure both laptops are on the same network and the API port is allowed through Laptop 1's firewall.
 
+For a quick two-laptop smoke check, Laptop 1 should run `Invoke-WebRequest http://localhost:8000/health`
+and Laptop 2 should open the UI and confirm that `/trips` returns the ten reserved
+`student_test` IDs. Select a trip and use the browser network/terminal logs to record
+the real `POST /predict` response; do not copy labels or metrics from a reference file.
+
 ## API endpoints
 
 - `GET /health`: API and pipeline configuration status.
 - `GET /trips`: trip IDs in the configured partition.
-- `POST /predict`: JSON body `{"trip_id":"00000000"}`; runs the injected classifier/decoder and optional server-side evaluation hook.
+- `POST /predict`: JSON body `{"trip_id":"00000000"}`; runs the injected classifier/decoder and optional server-side evaluation hook. IDs are validated as exactly eight digits.
 
 A prediction request returns HTTP 503 until the real pipeline factory is configured. This is intentional: the scaffold does not generate dummy predictions.
 
 ## Evidence checklist
 
-Capture screenshots only after running the connected implementation:
+Capture screenshots only after running the connected implementation (the scaffold intentionally
+cannot produce a successful prediction by itself):
 
 - Streamlit UI with a real trip selected and result rendered.
 - Laptop 1 terminal showing a successful API prediction request.
 - Record actual dependency versions, model/decoder artifact paths, and test results.
+
+The submission bundle should contain only checked-in source/docs plus verifiable generated
+artifacts from the connected run: the ten-trip list, API log, UI screenshot, model and
+decoder artifact manifest, and measured result/map files. If a run was not completed, leave
+that evidence out and mark it as pending rather than fabricating a screenshot or metric.
 
 Do not commit credentials, private keys, evaluator labels exposed to the client, or fabricated metrics.

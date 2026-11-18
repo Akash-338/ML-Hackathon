@@ -14,13 +14,27 @@ st.caption("Select a trip to run the connected classifier and route decoder.")
 def get_trips():
     response = requests.get(f"{API_URL}/trips", timeout=10)
     response.raise_for_status()
-    return response.json()
+    payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("trip_ids"), list):
+        raise ValueError("API returned an invalid trip list")
+    return payload
 
 try:
     health = requests.get(f"{API_URL}/health", timeout=5)
     health.raise_for_status()
-    st.success(f"API connected · partition: {health.json().get('partition', 'unknown')}")
-except requests.RequestException as exc:
+    health_data = health.json()
+    if not isinstance(health_data, dict):
+        raise ValueError("API returned an invalid health response")
+    partition = health_data.get("partition", "unknown")
+    pipeline_status = health_data.get("pipeline", "unknown")
+    if pipeline_status == "configured":
+        st.success(f"API connected · partition: {partition}")
+    else:
+        st.warning(
+            f"API connected · partition: {partition}. "
+            "The real classifier/decoder pipeline is not configured yet."
+        )
+except (requests.RequestException, ValueError) as exc:
     st.error(f"Cannot reach the PathSnap API at {API_URL}: {exc}")
     st.stop()
 
@@ -37,6 +51,7 @@ if not trip_ids:
 
 trip_id = st.selectbox("Choose a trip", trip_ids)
 if st.button("Reconstruct route", type="primary", use_container_width=True):
+    st.session_state.pop("last_result", None)
     with st.spinner("Running classifier and route decoder…"):
         try:
             response = requests.post(
@@ -44,13 +59,15 @@ if st.button("Reconstruct route", type="primary", use_container_width=True):
             )
             response.raise_for_status()
             result = response.json()
+            if not isinstance(result, dict):
+                raise ValueError("API returned an invalid prediction response")
             st.session_state["last_result"] = result
         except requests.HTTPError:
             try:
                 st.error(response.json().get("detail", response.text))
             except ValueError:
                 st.error(response.text)
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             st.error(f"Prediction request failed: {exc}")
 
 result = st.session_state.get("last_result")
