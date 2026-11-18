@@ -26,7 +26,6 @@ from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifie
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    accuracy_score,
     f1_score,
     log_loss,
     make_scorer,
@@ -131,18 +130,34 @@ def feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def cap_training_rows(frame: pd.DataFrame, max_rows: int) -> pd.DataFrame:
-    """Deterministically cap rows while preserving trip and label coverage."""
+    """Deterministically cap rows while keeping each sampled observation whole."""
     if max_rows <= 0 or len(frame) <= max_rows:
         return frame
     trip_ids = frame["trip_id"].astype(str).unique()
-    rows_per_trip = max(1, (max_rows + len(trip_ids) - 1) // len(trip_ids))
-    samples = [
-        group.sample(n=min(len(group), rows_per_trip), random_state=SEED)
-        for _, group in frame.groupby("trip_id", sort=False)
-    ]
-    capped = pd.concat(samples, ignore_index=False).sort_index()
-    capped = capped.iloc[:max_rows].copy()
-    return capped
+    observations = (
+        frame.groupby(["trip_id", "observation_index"], sort=False)
+        .size()
+        .rename("candidate_count")
+        .reset_index()
+    )
+    rng = np.random.RandomState(SEED)
+    selected_observations: list[tuple[str, int]] = []
+    base_budget, remainder = divmod(max_rows, len(trip_ids))
+    for trip_index, trip_id in enumerate(trip_ids):
+        trip_observations = observations[observations["trip_id"].astype(str) == trip_id]
+        order = rng.permutation(len(trip_observations))
+        budget = base_budget + (1 if trip_index < remainder else 0)
+        used = 0
+        for position in order:
+            row = trip_observations.iloc[position]
+            candidate_count = int(row["candidate_count"])
+            if used + candidate_count > budget:
+                continue
+            selected_observations.append((trip_id, int(row["observation_index"])))
+            used += candidate_count
+    row_keys = pd.MultiIndex.from_frame(frame[["trip_id", "observation_index"]])
+    keep = row_keys.isin(selected_observations)
+    return frame.loc[keep].copy()
 
 
 def make_models(fast: bool = False) -> Dict[str, Pipeline]:
@@ -243,7 +258,9 @@ def observation_metrics(frame: pd.DataFrame, probability: np.ndarray) -> Dict[st
         .head(1)
     )
     labels = pd.to_numeric(top_rows["label"], errors="coerce")
-    top1 = float(accuracy_score(labels.fillna(0).astype(int), (labels == 1).astype(int))) if len(labels) else 0.0
+    # Every observation's highest-scored candidate is the predicted arc. It is
+    # correct when that row carries the positive route-match proxy label.
+    top1 = float((labels.fillna(0).astype(int) == 1).mean()) if len(labels) else 0.0
     missed = 0
     total_observations = 0
     for _, group in scored.groupby(["trip_id", "observation_index"], sort=False):
@@ -679,7 +696,7 @@ def main() -> int:
         json.dumps(
             {
                 "selected_model": best_name,
-                "selection_rule": "Highest 5-fold trip-grouped out-of-fold Macro F1; ties favor Top-1 accuracy.",
+                "selection_rule": f"Highest {args.cv_folds}-fold trip-grouped out-of-fold Macro F1; ties favor Top-1 accuracy.",
                 "cv_result": next(r for r in comparison_records if r["model"] == best_name),
                 "student_test_note": "Only unlabeled candidate coverage/predictions are reported; no student-test route labels are opened.",
                 "plots": plots,

@@ -149,6 +149,11 @@ python scripts/train_classifier.py `
   --disable-bayesian
 ```
 
+For a quick smoke run, `--fast --max-train-rows 100000` uses a deterministic sample
+of complete GPS-observation candidate groups, reduces CV to at most two folds, uses
+lighter tree settings, and disables Bayesian tuning. This is useful for checking the
+pipeline; use the standard command above for the full five-fold comparison.
+
 ### Training models
 
 The comparison logs five attempted configurations:
