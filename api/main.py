@@ -1,7 +1,7 @@
-"""PathSnap evaluator API.
+""""PathSnap evaluator API.
 
-The model/decoder integration is deliberately injected through
-PATHSNAP_PIPELINE_FACTORY; no synthetic predictions or guessed model APIs.
+The classifier receives only GPS/network inputs. Reference routes are kept in
+this server process and are passed only to the separate evaluation hook.
 """
 from __future__ import annotations
 
@@ -40,12 +40,21 @@ def _partition_root() -> Path:
         raise HTTPException(status_code=500, detail="PATHSNAP_UI_PARTITION must be student_test or evaluator_test")
     return DATA_ROOT / PARTITION
 
-def _trip_dir(trip_id: str) -> Path:
-    trip_dir = (_partition_root() / trip_id).resolve()
+def _trip_files(trip_id: str) -> dict[str, Path]:
     root = _partition_root().resolve()
+    trip_dir = (root / trip_id).resolve()
     if root not in trip_dir.parents or not trip_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"Trip {trip_id} was not found in {PARTITION}")
-    return trip_dir
+    files = {
+        "track": trip_dir / f"{trip_id}.track",
+        "nodes": trip_dir / f"{trip_id}.nodes",
+        "arcs": trip_dir / f"{trip_id}.arcs",
+        "reference_route": trip_dir / f"{trip_id}.route",
+    }
+    missing = [str(path.name) for key, path in files.items() if key != "reference_route" and not path.is_file()]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Trip data is incomplete: {', '.join(missing)}")
+    return files
 
 def _load_pipeline() -> Any:
     if not PIPELINE_FACTORY:
@@ -74,21 +83,30 @@ def list_trips() -> dict[str, Any]:
 
 @app.post("/predict")
 def predict(request: PredictionRequest) -> dict[str, Any]:
-    trip_dir = _trip_dir(request.trip_id)
-    required = [f"{request.trip_id}.track", f"{request.trip_id}.nodes", f"{request.trip_id}.arcs"]
-    missing = [name for name in required if not (trip_dir / name).is_file()]
-    if missing:
-        raise HTTPException(status_code=422, detail=f"Trip data is incomplete: {', '.join(missing)}")
+    files = _trip_files(request.trip_id)
     try:
         pipeline = _load_pipeline()
-        result = pipeline.predict_trip(trip_id=request.trip_id, trip_dir=trip_dir)
+        # IMPORTANT: the predictor gets only .track/.nodes/.arcs, never .route.
+        prediction = pipeline.predict_trip(
+            trip_id=request.trip_id,
+            track_path=files["track"],
+            nodes_path=files["nodes"],
+            arcs_path=files["arcs"],
+        )
+        if not isinstance(prediction, dict):
+            raise TypeError("predict_trip must return a dictionary")
+        # Reference route is supplied only to the server-side evaluation hook.
+        metrics = {}
+        if files["reference_route"].is_file() and hasattr(pipeline, "evaluate_prediction"):
+            metrics = pipeline.evaluate_prediction(
+                prediction=prediction,
+                reference_route_path=files["reference_route"],
+            )
+        forbidden = {"ground_truth", "reference_route", "true_route", "labels", "y_true"}
+        safe_prediction = {k: v for k, v in prediction.items() if k not in forbidden}
+        safe_metrics = metrics if isinstance(metrics, dict) else {}
+        return {"trip_id": request.trip_id, "partition": PARTITION, **safe_prediction, "metrics": safe_metrics}
     except PipelineUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Prediction pipeline failed: {exc}") from exc
-    if not isinstance(result, dict):
-        raise HTTPException(status_code=500, detail="Pipeline must return a dictionary")
-    # Never serialize reference labels, raw reference routes, or server-side truth.
-    forbidden = {"ground_truth", "reference_route", "true_route", "labels", "y_true"}
-    safe_result = {k: v for k, v in result.items() if k not in forbidden}
-    return {"trip_id": request.trip_id, "partition": PARTITION, **safe_result}
