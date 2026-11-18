@@ -1,0 +1,44 @@
+[12:25:39][INFO] ==================================================
+[12:25:39][INFO] PathSnap Route Reconstruction: Classifier vs HMM
+[12:25:39][INFO] ==================================================
+[12:25:39][INFO] Found 80 train trips in data\train
+[12:25:39][INFO] Loading 15 train trips for Group-CV hyperparameter tuning: ['00000001', '00000002', '00000003', '00000004', '00000005', '00000006', '00000008', '00000010', '00000011', '00000012', '00000013', '00000014', '00000016', '00000018', '00000019']
+[12:25:41][INFO] Starting Group-aware Cross Validation for HMMParams on TRAIN...
+[12:25:41][INFO] Pre-caching candidates for 15 tuning trips...
+[12:26:27][INFO] Params: {'beta': 5.0, 'emission_weight': 1.0, 'invalid_transition_penalty': 40.0} => CV Score: 0.7650
+[12:26:43][INFO] Params: {'beta': 10.0, 'emission_weight': 0.5, 'invalid_transition_penalty': 50.0} => CV Score: 0.8190
+[12:26:59][INFO] Params: {'beta': 10.0, 'emission_weight': 1.0, 'invalid_transition_penalty': 50.0} => CV Score: 0.8333
+[12:27:16][INFO] Params: {'beta': 10.0, 'emission_weight': 2.0, 'invalid_transition_penalty': 50.0} => CV Score: 0.8288
+[12:27:32][INFO] Params: {'beta': 20.0, 'emission_weight': 1.0, 'invalid_transition_penalty': 60.0} => CV Score: 0.8421
+[12:27:48][INFO] Params: {'beta': 30.0, 'emission_weight': 1.0, 'invalid_transition_penalty': 80.0} => CV Score: 0.8437
+[12:27:48][INFO] Optimal parameters found: {'beta': 30.0, 'emission_weight': 1.0, 'invalid_transition_penalty': 80.0} (CV Score: 0.8437)
+[12:27:48][INFO] Saved tuned parameters to configs\hmm_params.json
+[12:27:48][INFO] Found 10 student_test trips in data\student_test: ['00000000', '00000007', '00000009', '00000040', '00000052', '00000056', '00000065', '00000076', '00000077', '00000091']
+[12:27:48][INFO] --- Evaluating Train Subset ---
+[12:28:08][INFO] --- Evaluating Student Test Set ---
+[12:28:09][INFO] Test Trip 00000000: Top1 Acc=49.5%, HMM Acc=93.9% (Delta=+44.5%), Top1 Cont=79.0%, HMM Cont=93.0% (Delta=+14.0%), Time=0.72s, Status=helped
+[12:28:09][INFO] Test Trip 00000007: Top1 Acc=44.8%, HMM Acc=97.1% (Delta=+52.3%), Top1 Cont=79.8%, HMM Cont=100.0% (Delta=+20.2%), Time=0.19s, Status=helped
+[12:28:10][INFO] Test Trip 00000009: Top1 Acc=46.6%, HMM Acc=82.8% (Delta=+36.2%), Top1 Cont=46.5%, HMM Cont=84.0% (Delta=+37.5%), Time=0.84s, Status=helped
+[12:28:11][INFO] Test Trip 00000040: Top1 Acc=55.2%, HMM Acc=95.8% (Delta=+40.6%), Top1 Cont=75.3%, HMM Cont=95.2% (Delta=+19.9%), Time=0.74s, Status=helped
+[12:28:12][INFO] Test Trip 00000052: Top1 Acc=81.3%, HMM Acc=89.3% (Delta=+8.0%), Top1 Cont=52.0%, HMM Cont=84.6% (Delta=+32.6%), Time=0.21s, Status=helped
+[12:28:14][INFO] Test Trip 00000056: Top1 Acc=77.8%, HMM Acc=76.7% (Delta=-1.0%), Top1 Cont=51.6%, HMM Cont=87.9% (Delta=+36.3%), Time=1.91s, Status=hurt
+[12:28:15][INFO] Test Trip 00000065: Top1 Acc=77.2%, HMM Acc=79.7% (Delta=+2.5%), Top1 Cont=52.6%, HMM Cont=85.4% (Delta=+32.8%), Time=0.64s, Status=helped
+[12:28:17][INFO] Test Trip 00000076: Top1 Acc=46.0%, HMM Acc=80.7% (Delta=+34.7%), Top1 Cont=54.4%, HMM Cont=82.6% (Delta=+28.2%), Time=1.52s, Status=helped
+[12:28:19][INFO] Test Trip 00000077: Top1 Acc=43.0%, HMM Acc=78.2% (Delta=+35.2%), Top1 Cont=70.5%, HMM Cont=89.9% (Delta=+19.4%), Time=1.69s, Status=helped
+[12:28:20][INFO] Test Trip 00000091: Top1 Acc=62.1%, HMM Acc=87.1% (Delta=+24.9%), Top1 Cont=49.3%, HMM Cont=87.2% (Delta=+37.9%), Time=0.85s, Status=helped
+[12:28:20][INFO] Saved per-trip metrics to results\hmm\per_trip_metrics.csv
+[12:28:20][INFO] Saved helped/hurt analysis to results\hmm\helped_hurt.csv
+[12:28:20][INFO] Saved summary metrics to results\hmm\summary.json
+[12:28:20][INFO] ==================================================
+[12:28:20][INFO] STUDENT TEST AGGREGATE RESULTS SUMMARY
+[12:28:20][INFO] ==================================================
+[12:28:20][INFO] Mean Classifier Top-1 Accuracy:   58.35%
+[12:28:20][INFO] Mean HMM Viterbi Accuracy:         86.14%
+[12:28:20][INFO] Mean Delta Accuracy:               +27.79%
+[12:28:20][INFO] Mean Classifier Route Continuity:  61.11%
+[12:28:20][INFO] Mean HMM Route Continuity:         88.98%
+[12:28:20][INFO] Mean Delta Route Continuity:       +27.87%
+[12:28:20][INFO] Mean Candidate Miss Rate:          0.06%
+[12:28:20][INFO] Mean HMM Runtime per Trip:         0.931 s
+[12:28:20][INFO] Trips Helped: 9 / 10 | Hurt: 1 | Neutral: 0
+[12:28:20][INFO] ==================================================
