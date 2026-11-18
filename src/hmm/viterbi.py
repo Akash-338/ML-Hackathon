@@ -91,7 +91,35 @@ def decode_trip(
     if params is None:
         params = HMMParams()
 
+    timestamps = np.asarray(timestamps, dtype=np.float64)
+    gps_xy = np.asarray(gps_xy, dtype=np.float64)
     T = len(timestamps)
+
+    if timestamps.ndim != 1:
+        raise ValueError("timestamps must be a one-dimensional sequence")
+    if gps_xy.shape != (T, 2):
+        raise ValueError(f"gps_xy must have shape ({T}, 2), got {gps_xy.shape}")
+    if len(candidates) != T:
+        raise ValueError(f"candidates must have length {T}, got {len(candidates)}")
+    if len(scores) != T:
+        raise ValueError(f"scores must have length {T}, got {len(scores)}")
+    if not np.all(np.isfinite(gps_xy)):
+        raise ValueError("gps_xy contains NaN or infinite coordinates")
+    if not np.all(np.isfinite(timestamps)):
+        raise ValueError("timestamps contains NaN or infinite values")
+    if T > 1 and np.any(np.diff(timestamps) < 0):
+        raise ValueError("timestamps must be ordered monotonically")
+    if params.beta <= 0:
+        raise ValueError("HMMParams.beta must be positive")
+    if params.emission_weight < 0:
+        raise ValueError("HMMParams.emission_weight must be non-negative")
+    if params.invalid_transition_penalty < 0:
+        raise ValueError("HMMParams.invalid_transition_penalty must be non-negative")
+    if params.gap_threshold_s < 0:
+        raise ValueError("HMMParams.gap_threshold_s must be non-negative")
+    if params.eps <= 0:
+        raise ValueError("HMMParams.eps must be positive")
+
     pred_arc_ids = np.full(T, -1, dtype=np.int64)
     sources: List[str] = ["no_candidates"] * T
     segment_breaks: List[int] = []
@@ -104,14 +132,26 @@ def decode_trip(
     clean_candidates: List[np.ndarray] = []
     clean_scores: List[np.ndarray] = []
     for t in range(T):
-        c_t = np.asarray(candidates[t], dtype=np.int64) if len(candidates[t]) > 0 else np.empty(0, dtype=np.int64)
-        s_t = np.asarray(scores[t], dtype=np.float64) if len(scores[t]) > 0 else np.empty(0, dtype=np.float64)
+        raw_candidates = candidates[t]
+        raw_scores = scores[t]
+        c_t = np.asarray(raw_candidates, dtype=np.int64).reshape(-1) if len(raw_candidates) > 0 else np.empty(0, dtype=np.int64)
+        s_t = np.asarray(raw_scores, dtype=np.float64).reshape(-1) if len(raw_scores) > 0 else np.empty(0, dtype=np.float64)
 
-        if len(c_t) > 0 and len(s_t) > 0:
+        if len(c_t) != len(s_t):
+            raise ValueError(
+                f"candidates and scores must align at observation {t}: "
+                f"got {len(c_t)} candidates and {len(s_t)} scores"
+            )
+
+        if len(c_t) > 0:
             # Clean NaNs or negative numbers in scores
             s_t = np.nan_to_num(s_t, nan=0.0, posinf=1.0, neginf=0.0)
             s_t = np.clip(s_t, 0.0, 1.0)
-            clean_candidates.append(c_t)
+            valid_mask = (c_t >= 0) & (c_t < network.num_arcs)
+            clean_candidates.append(c_t[valid_mask])
+            s_t = s_t[valid_mask]
+            if len(s_t) > 0:
+                s_t = s_t / max(float(np.sum(s_t)), params.eps)
             clean_scores.append(s_t)
         else:
             clean_candidates.append(np.empty(0, dtype=np.int64))
@@ -196,6 +236,7 @@ def decode_trip(
                 best_preds = np.zeros(K_curr, dtype=np.int64)
                 V_curr = log_emissions
                 backpointers[step_idx] = None
+                sources[t] = "fallback_top1"
             else:
                 best_preds = np.argmax(incoming_probs, axis=0)  # Shape (K_curr,)
                 best_vals = np.max(incoming_probs, axis=0)      # Shape (K_curr,)
@@ -212,7 +253,8 @@ def decode_trip(
         for step_idx in range(seg_len - 1, -1, -1):
             t = seg_start + step_idx
             pred_arc_ids[t] = clean_candidates[t][curr_k]
-            sources[t] = "viterbi"
+            if sources[t] != "fallback_top1":
+                sources[t] = "viterbi"
 
             bp = backpointers[step_idx]
             if bp is not None:

@@ -97,6 +97,12 @@ def adapt_matrices_to_decoder(
     pad_value: int = -1,
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """Convert 2D dense arrays of shape (T, K) with padding to decoder contract."""
+    candidate_matrix = np.asarray(candidate_matrix)
+    score_matrix = np.asarray(score_matrix)
+    if candidate_matrix.ndim != 2 or score_matrix.shape != candidate_matrix.shape:
+        raise ValueError(
+            "candidate_matrix and score_matrix must be 2D arrays with the same shape"
+        )
     T = len(candidate_matrix)
     candidates: List[np.ndarray] = []
     scores: List[np.ndarray] = []

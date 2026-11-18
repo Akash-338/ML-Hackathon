@@ -225,3 +225,34 @@ def test_nan_and_zero_scores(linear_network):
     assert len(result.pred_arc_ids) == 2
     assert not np.isnan(result.log_prob)
     assert not np.isinf(result.log_prob)
+
+
+def test_mismatched_candidates_and_scores_raise(linear_network):
+    timestamps = np.array([0.0])
+    gps_xy = np.array([[10.0, 0.0]])
+
+    with pytest.raises(ValueError, match="must align"):
+        decode_trip(
+            timestamps,
+            gps_xy,
+            [np.array([0, 1])],
+            [np.array([0.5])],
+            linear_network,
+        )
+
+
+def test_invalid_arc_ids_are_explicitly_empty(linear_network):
+    timestamps = np.array([0.0, 1.0])
+    gps_xy = np.array([[10.0, 0.0], [30.0, 0.0]])
+
+    result = decode_trip(
+        timestamps,
+        gps_xy,
+        [np.array([-1, 999]), np.array([1])],
+        [np.array([0.5, 0.5]), np.array([1.0])],
+        linear_network,
+    )
+
+    assert result.pred_arc_ids[0] == -1
+    assert result.source[0] == "no_candidates"
+    assert result.pred_arc_ids[1] == 1

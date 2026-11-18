@@ -68,9 +68,17 @@ def align_gps_to_route(
     if T == 0 or len(route_arc_ids) == 0:
         return np.full(T, -1, dtype=np.int64)
 
+    valid_route_mask = (
+        (route_arc_ids >= 0)
+        & (route_arc_ids < network.num_arcs)
+    )
+    valid_route_ids = route_arc_ids[valid_route_mask]
+    if len(valid_route_ids) == 0:
+        return np.full(T, -1, dtype=np.int64)
+
     # Build lines for route arcs
-    from_pts = network.nodes_xy[network.arcs[route_arc_ids, 0]]
-    to_pts = network.nodes_xy[network.arcs[route_arc_ids, 1]]
+    from_pts = network.nodes_xy[network.arcs[valid_route_ids, 0]]
+    to_pts = network.nodes_xy[network.arcs[valid_route_ids, 1]]
     line_coords = np.stack([from_pts, to_pts], axis=1)
     route_lines = shapely.linestrings(line_coords)
 
@@ -79,12 +87,16 @@ def align_gps_to_route(
 
     nearest_indices = tree.query_nearest(gps_pts, all_matches=False)
     # Handle shapely query_nearest return format: shape (2, T) or (T,)
-    if isinstance(nearest_indices, np.ndarray) and nearest_indices.ndim == 2:
-        r_indices = nearest_indices[1]
+    nearest_indices = np.asarray(nearest_indices)
+    if nearest_indices.ndim == 2:
+        r_indices = nearest_indices[-1]
     else:
-        r_indices = np.asarray(nearest_indices)
+        r_indices = nearest_indices
 
-    ref_arcs = route_arc_ids[r_indices]
+    r_indices = np.asarray(r_indices, dtype=np.int64).reshape(-1)
+    if len(r_indices) != T:
+        return np.full(T, -1, dtype=np.int64)
+    ref_arcs = valid_route_ids[r_indices]
     return ref_arcs.astype(np.int64)
 
 

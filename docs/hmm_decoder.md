@@ -169,6 +169,12 @@ $$\text{backpointer}[j] = \text{argmax}(\text{incoming}[:, j]), \quad V_t = \max
 
 ## 7. Real Measured Results (Student Test Set)
 
+> **Reproducibility/status note:** The checked-in metrics were produced with
+> `src/hmm/dev_candidates.py`, a distance-based development stand-in. They are
+> not evidence from the upstream classifier implementation. The comparison script
+> becomes a real classifier-vs-HMM benchmark when upstream candidate and score
+> artifacts are supplied; it never reads `evaluator_test` labels or data.
+
 All metrics below are generated from real executions of `scripts/compare_hmm.py` across the 10 student test trips (`data/student_test`):
 
 | Trip ID | Points | Top-1 Acc | HMM Acc | $\Delta$ Acc | Top-1 Cont | HMM Cont | $\Delta$ Cont | Miss Rate | HMM Time | Status |

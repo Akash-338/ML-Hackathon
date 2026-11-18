@@ -55,7 +55,7 @@ class RoadNetwork:
             self._adj[u].append((v, arc_id, length))
 
         # Cache for shortest-path distances between pairs of arcs: (a, b) -> distance_or_None
-        self._dist_cache: Dict[Tuple[int, int], Optional[float]] = {}
+        self._dist_cache: Dict[Tuple[int, int, int, float], Optional[float]] = {}
 
     def are_connected(self, arc_prev: int, arc_cur: int) -> bool:
         """Return True if arc_prev connects directly to arc_cur (1 hop).
@@ -94,7 +94,7 @@ class RoadNetwork:
 
         Results are cached in self._dist_cache for instant repeated lookups.
         """
-        cache_key = (arc_prev, arc_cur)
+        cache_key = (arc_prev, arc_cur, int(max_hops), float(max_meters))
         if cache_key in self._dist_cache:
             return self._dist_cache[cache_key]
 
