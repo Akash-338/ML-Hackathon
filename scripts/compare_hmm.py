@@ -12,12 +12,14 @@ Workflow:
    - Route continuity (fraction of consecutive distinct predicted arcs that are connected)
    - Candidate miss rate (theoretical error ceiling)
    - Runtime per trip (seconds)
-5. Writes per-trip metrics, helped/hurt CSV, summary metrics JSON, and execution log.
+5. Writes per-trip metrics, helped/hurt CSV, summary metrics JSON, provenance,
+   and execution log.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import os
@@ -27,8 +29,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
-import pandas as pd
-from sklearn.model_selection import KFold
 
 # Ensure src is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -122,6 +122,10 @@ def tune_hyperparameters(
 ) -> HMMParams:
     """Tune HMMParams via Group-aware Cross-Validation on training trips."""
     logger.info("Starting Group-aware Cross Validation for HMMParams on TRAIN...")
+    if len(train_trips) < 2:
+        logger.warning("Fewer than 2 training trips; using default HMMParams.")
+        return HMMParams()
+    n_splits = min(n_splits, len(train_trips))
 
     # Grid of candidate parameters
     param_grid = [
@@ -133,7 +137,6 @@ def tune_hyperparameters(
         {"beta": 30.0, "emission_weight": 1.0, "invalid_transition_penalty": 80.0},
     ]
 
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     trip_indices = np.arange(len(train_trips))
 
     best_score = -float("inf")
@@ -152,17 +155,22 @@ def tune_hyperparameters(
         params = HMMParams(**config)
         fold_scores = []
 
-        for train_idx, val_idx in kf.split(trip_indices):
+        for fold in range(n_splits):
+            val_idx = trip_indices[fold::n_splits]
             val_accs = []
             val_conts = []
 
             for i in val_idx:
                 tr, net, cands, scs, ref = cached_trips[i]
                 res = decode_trip(tr.timestamps, tr.gps_xy, cands, scs, net, params)
+                top1_arcs = np.array([
+                    cands[t][int(np.argmax(scs[t]))] if len(cands[t]) > 0 else -1
+                    for t in range(len(cands))
+                ], dtype=np.int64)
                 m = evaluate_trip(
                     trip_id=tr.trip_id,
                     pred_arc_ids=res.pred_arc_ids,
-                    top1_arc_ids=res.pred_arc_ids,
+                    top1_arc_ids=top1_arcs,
                     ref_arc_ids=ref,
                     candidates=cands,
                     network=net,
@@ -211,6 +219,11 @@ def main():
 
     # 1. Load train trips for tuning
     train_dir = Path(args.train_dir)
+    if not train_dir.is_dir():
+        parser.error(
+            f"Training partition is missing: {train_dir}. "
+            "Provide --train-dir for permitted training data."
+        )
     all_train_ids = sorted([
         d.name for d in train_dir.iterdir()
         if d.is_dir() and (d / f"{d.name}.track").exists()
@@ -232,6 +245,11 @@ def main():
 
     # 3. Evaluate on Student Test Trips (all 10)
     test_dir = Path(args.test_dir)
+    if not test_dir.is_dir():
+        parser.error(
+            f"Student-test partition is missing: {test_dir}. "
+            "Provide --test-dir for permitted student-test data."
+        )
     test_ids = sorted([
         d.name for d in test_dir.iterdir()
         if d.is_dir() and (d / f"{d.name}.track").exists()
@@ -299,37 +317,71 @@ def main():
         )
 
     # 4. Save CSV Outputs
-    df_all = pd.DataFrame(all_records)
-    df_all.to_csv(results_dir / "per_trip_metrics.csv", index=False)
+    def write_csv(path: Path, records: List[Dict[str, Any]]) -> None:
+        if not records:
+            return
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(records[0].keys()))
+            writer.writeheader()
+            writer.writerows(records)
+
+    write_csv(results_dir / "per_trip_metrics.csv", all_records)
     logger.info(f"Saved per-trip metrics to {results_dir / 'per_trip_metrics.csv'}")
 
-    df_hh = pd.DataFrame(helped_hurt_records)
-    df_hh.to_csv(results_dir / "helped_hurt.csv", index=False)
+    write_csv(results_dir / "helped_hurt.csv", helped_hurt_records)
     logger.info(f"Saved helped/hurt analysis to {results_dir / 'helped_hurt.csv'}")
 
     # 5. Compute Aggregate Summary for Student Test
-    test_df = df_all[df_all["split"] == "student_test"]
+    test_df = [r for r in all_records if r["split"] == "student_test"]
+
+    def mean_field(records: List[Dict[str, Any]], field: str) -> float:
+        values = [float(r[field]) for r in records if r[field] is not None]
+        return float(np.mean(values)) if values else 0.0
+
     summary = {
+        "evaluation_source": "dev_distance_standin",
+        "candidate_generator": "src.hmm.dev_candidates.generate_dev_candidates",
+        "real_classifier_evaluation": False,
+        "evaluator_test_accessed": False,
         "num_student_test_trips": len(test_df),
-        "total_test_observations": int(test_df["num_points"].sum()),
-        "mean_top1_accuracy": float(test_df["top1_accuracy"].mean()),
-        "mean_hmm_accuracy": float(test_df["hmm_accuracy"].mean()),
-        "mean_delta_accuracy": float(test_df["delta_accuracy"].mean()),
-        "mean_top1_continuity": float(test_df["top1_continuity"].mean()),
-        "mean_hmm_continuity": float(test_df["hmm_continuity"].mean()),
-        "mean_delta_continuity": float(test_df["delta_continuity"].mean()),
-        "mean_candidate_miss_rate": float(test_df["candidate_miss_rate"].mean()),
-        "mean_top1_runtime_s": float(test_df["top1_runtime_s"].mean()),
-        "mean_hmm_runtime_s": float(test_df["hmm_runtime_s"].mean()),
-        "trips_helped": int((test_df["status"] == "helped").sum()),
-        "trips_hurt": int((test_df["status"] == "hurt").sum()),
-        "trips_neutral": int((test_df["status"] == "neutral").sum()),
+        "total_test_observations": int(sum(r["num_points"] for r in test_df)),
+        "mean_top1_accuracy": mean_field(test_df, "top1_accuracy"),
+        "mean_hmm_accuracy": mean_field(test_df, "hmm_accuracy"),
+        "mean_delta_accuracy": mean_field(test_df, "delta_accuracy"),
+        "mean_top1_continuity": mean_field(test_df, "top1_continuity"),
+        "mean_hmm_continuity": mean_field(test_df, "hmm_continuity"),
+        "mean_delta_continuity": mean_field(test_df, "delta_continuity"),
+        "mean_candidate_miss_rate": mean_field(test_df, "candidate_miss_rate"),
+        "mean_top1_runtime_s": mean_field(test_df, "top1_runtime_s"),
+        "mean_hmm_runtime_s": mean_field(test_df, "hmm_runtime_s"),
+        "trips_helped": sum(r["status"] == "helped" for r in test_df),
+        "trips_hurt": sum(r["status"] == "hurt" for r in test_df),
+        "trips_neutral": sum(r["status"] == "neutral" for r in test_df),
         "best_params": best_params.__dict__,
     }
 
     with open(results_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     logger.info(f"Saved summary metrics to {results_dir / 'summary.json'}")
+
+    provenance = {
+        "evaluation_source": summary["evaluation_source"],
+        "candidate_generator": summary["candidate_generator"],
+        "real_classifier_evaluation": summary["real_classifier_evaluation"],
+        "evaluator_test_accessed": summary["evaluator_test_accessed"],
+        "train_dir": str(train_dir),
+        "student_test_dir": str(test_dir),
+        "notes": (
+            "Scores were generated by the distance-based development stand-in. "
+            "No upstream model.joblib or candidate JSONL was available."
+        ),
+    }
+    with open(results_dir / "provenance.json", "w", encoding="utf-8") as f:
+        json.dump(provenance, f, indent=2)
+    if provenance["evaluation_source"] == "dev_distance_standin":
+        with open(results_dir / "standin_summary.json", "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+    logger.info(f"Saved evaluation provenance to {results_dir / 'provenance.json'}")
 
     logger.info("==================================================")
     logger.info("STUDENT TEST AGGREGATE RESULTS SUMMARY")
