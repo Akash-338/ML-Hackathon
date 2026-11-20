@@ -3,7 +3,7 @@
   "candidate_generator": "src.hmm.adapters.load_candidate_jsonl_scores",
   "real_classifier_evaluation": true,
   "evaluator_test_accessed": false,
-  "train_dir": "E:\\PES\\Projects\\ML-Hackathon\\Data\\Data\\train",
-  "student_test_dir": "E:\\PES\\Projects\\ML-Hackathon\\Data\\Data\\student_test",
+  "train_dir": "Data\\Data\\train",
+  "student_test_dir": "Data\\Data\\student_test",
   "notes": "Scores were produced by the permitted logistic classifier artifact from pathsnap.candidates.v1 train/student-test JSONL."
 }
