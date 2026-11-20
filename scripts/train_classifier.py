@@ -281,12 +281,13 @@ def observation_metrics(frame: pd.DataFrame, probability: np.ndarray) -> Dict[st
 def candidate_row_metrics(frame: pd.DataFrame, probability: np.ndarray) -> Dict[str, Any]:
     y = pd.to_numeric(frame["label"], errors="coerce").fillna(0).astype(int).to_numpy()
     y_pred = (probability >= 0.5).astype(int)
+    observation = observation_metrics(frame, probability)
     result: Dict[str, Any] = {
-        "top1_accuracy": observation_metrics(frame, probability)["top1_accuracy"],
+        "top1_accuracy": observation["top1_accuracy"],
         "macro_f1": float(f1_score(y, y_pred, average="macro", zero_division=0)),
-        "candidate_miss_rate": observation_metrics(frame, probability)["candidate_miss_rate"],
+        "candidate_miss_rate": observation["candidate_miss_rate"],
         "route_continuity": None,
-        "num_observations": observation_metrics(frame, probability)["num_observations"],
+        "num_observations": observation["num_observations"],
     }
     try:
         result["log_loss"] = float(log_loss(y, probability, labels=[0, 1]))
@@ -633,7 +634,7 @@ def main() -> int:
         "inference_seconds": student_test_inference_seconds,
         "labels_used": False,
         "ground_truth_used": False,
-        "candidate_coverage_evaluated": True,
+        "candidate_coverage_evaluated": False,
     }
 
     metadata = {

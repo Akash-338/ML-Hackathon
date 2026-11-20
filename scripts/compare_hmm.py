@@ -1,8 +1,8 @@
 """Comprehensive HMM vs Classifier-Only Comparison Script.
 
 Workflow:
-1. Loads training trips and conducts Group-aware Cross-Validation (GroupKFold by trip)
-   to tune HMMParams (beta, emission_weight, invalid_transition_penalty).
+1. Selects HMMParams (beta, emission_weight, invalid_transition_penalty) on training trips.
+   Classifier scores may be in-sample, so this is not independent cross-validation.
 2. Saves the optimal hyperparameters to configs/hmm_params.json and results/hmm/best_params.json.
 3. Evaluates both Classifier-Only Top-1 (argmax) and Classifier + HMM Viterbi on:
    - Training trips
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import os
@@ -129,8 +130,8 @@ def tune_hyperparameters(
     n_splits: int = 3,
     classifier_scores: Dict[str, Tuple[List[np.ndarray], List[np.ndarray]]] | None = None,
 ) -> HMMParams:
-    """Tune HMMParams via Group-aware Cross-Validation on training trips."""
-    logger.info("Starting Group-aware Cross Validation for HMMParams on TRAIN...")
+    """Select decoder parameters on training trips using the supplied scores."""
+    logger.info("Selecting HMM parameters on training trips (not independent validation).")
     if len(train_trips) < 2:
         logger.warning("Fewer than 2 training trips; using default HMMParams.")
         return HMMParams()
@@ -160,6 +161,10 @@ def tune_hyperparameters(
             cands, scs = generate_dev_candidates(tr.gps_xy, net, k=15)
         else:
             cands, scs = classifier_scores[tr.trip_id]
+            if len(cands) < len(tr.gps_xy):
+                missing = len(tr.gps_xy) - len(cands)
+                cands = cands + [np.empty(0, dtype=np.int64) for _ in range(missing)]
+                scs = scs + [np.empty(0, dtype=np.float64) for _ in range(missing)]
         ref = align_gps_to_route(tr.gps_xy, tr.route, net) if tr.route is not None else None
         cached_trips.append((tr, net, cands, scs, ref))
 
@@ -200,13 +205,13 @@ def tune_hyperparameters(
             fold_scores.append(obj)
 
         cv_score = float(np.mean(fold_scores))
-        logger.info(f"Params: {config} => CV Score: {cv_score:.4f}")
+        logger.info(f"Params: {config} => training selection score: {cv_score:.4f}")
 
         if cv_score > best_score:
             best_score = cv_score
             best_config = config
 
-    logger.info(f"Optimal parameters found: {best_config} (CV Score: {best_score:.4f})")
+    logger.info(f"Selected parameters: {best_config} (training selection score: {best_score:.4f})")
     return HMMParams(**best_config)
 
 
@@ -220,6 +225,9 @@ def main():
     parser.add_argument("--candidate-jsonl", type=str, default="", help="Permitted candidate JSONL for real classifier scores")
     parser.add_argument("--classifier-artifacts", type=str, default="", help="Issue #2 classifier artifact directory")
     args = parser.parse_args()
+
+    if bool(args.candidate_jsonl) != bool(args.classifier_artifacts):
+        parser.error("Provide both --candidate-jsonl and --classifier-artifacts, or neither.")
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -246,8 +254,10 @@ def main():
 
     # Use first N diverse train trips for tuning
     tune_ids = all_train_ids[:args.num_train_tune]
-    logger.info(f"Loading {len(tune_ids)} train trips for Group-CV hyperparameter tuning: {tune_ids}")
+    logger.info(f"Loading {len(tune_ids)} train trips for parameter selection: {tune_ids}")
     train_trips = [load_trip_data(tid, train_dir) for tid in tune_ids]
+    if not train_trips:
+        parser.error("No training trips found for HMM parameter selection.")
     all_train_trips = [load_trip_data(tid, train_dir) for tid in all_train_ids]
 
     train_classifier_scores = None
@@ -261,7 +271,7 @@ def main():
             trip_ids=all_train_ids,
         )
 
-    # 2. Hyperparameter Tuning via GroupKFold CV
+    # 2. Select decoder parameters on training trips.
     best_params = tune_hyperparameters(
         train_trips,
         logger,
@@ -286,6 +296,8 @@ def main():
         if d.is_dir() and (d / f"{d.name}.track").exists()
     ])
     logger.info(f"Found {len(test_ids)} student_test trips in {test_dir}: {test_ids}")
+    if not test_ids:
+        parser.error("No student-test trips found.")
     if args.candidate_jsonl and args.classifier_artifacts:
         test_classifier_scores = load_candidate_jsonl_scores(
             args.candidate_jsonl,
@@ -441,6 +453,9 @@ def main():
         json.dump(summary, f, indent=2)
     logger.info(f"Saved summary metrics to {results_dir / 'summary.json'}")
 
+    model_path = Path(args.classifier_artifacts) / "model.joblib" if real_classifier_evaluation else None
+    metadata_path = Path(args.classifier_artifacts) / "metadata.json" if real_classifier_evaluation else None
+    classifier_metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path and metadata_path.is_file() else {}
     provenance = {
         "evaluation_source": summary["evaluation_source"],
         "candidate_generator": summary["candidate_generator"],
@@ -448,8 +463,13 @@ def main():
         "evaluator_test_accessed": summary["evaluator_test_accessed"],
         "train_dir": str(train_dir),
         "student_test_dir": str(test_dir),
+        "classifier_model_sha256": hashlib.sha256(model_path.read_bytes()).hexdigest() if model_path else None,
+        "classifier_model": classifier_metadata.get("selected_model", classifier_metadata.get("model")),
+        "candidate_jsonl": str(args.candidate_jsonl) if real_classifier_evaluation else None,
+        "tuning_trip_ids": tune_ids,
+        "tuning_limitation": "Classifier scores on training trips may be in-sample; parameter selection is not independent cross-validation.",
         "notes": (
-            "Scores were produced by the permitted logistic classifier artifact "
+            "Scores were produced by the supplied classifier artifact "
             "from pathsnap.candidates.v1 train/student-test JSONL."
             if real_classifier_evaluation
             else (
@@ -476,7 +496,7 @@ def main():
     logger.info(f"Mean Delta Route Continuity:       {summary['mean_delta_continuity']:+.2%}")
     logger.info(f"Mean Candidate Miss Rate:          {summary['mean_candidate_miss_rate']:.2%}")
     logger.info(f"Mean HMM Runtime per Trip:         {summary['mean_hmm_runtime_s']:.3f} s")
-    logger.info(f"Trips Helped: {summary['trips_helped']} / 10 | Hurt: {summary['trips_hurt']} | Neutral: {summary['trips_neutral']}")
+    logger.info(f"Trips Helped: {summary['trips_helped']} / {len(test_df)} | Hurt: {summary['trips_hurt']} | Neutral: {summary['trips_neutral']}")
     logger.info("==================================================")
 
 

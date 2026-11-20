@@ -59,13 +59,6 @@ class SavedArtifactPipeline:
 
         candidates = pd.DataFrame(_candidate_rows(self.candidates_path, trip_id))
         candidates["probability"] = self.scorer.predict_frame(candidates)
-        top1 = (
-            candidates.sort_values("probability", ascending=False)
-            .drop_duplicates("observation_index")
-            .sort_values("observation_index")["candidate_arc_id"]
-            .astype(int)
-            .tolist()
-        )
         candidate_arrays, score_arrays = adapt_dataframe_to_decoder(
             candidates.assign(step=candidates["observation_index"], arc_id=candidates["candidate_arc_id"]),
             len(timestamps),
@@ -73,6 +66,8 @@ class SavedArtifactPipeline:
             arc_col="arc_id",
             score_col="probability",
         )
+        top1 = [int(arcs[np.argmax(scores)]) if len(arcs) else -1
+                for arcs, scores in zip(candidate_arrays, score_arrays)]
         decoded = decode_trip(
             timestamps=timestamps,
             gps_xy=gps_xy,

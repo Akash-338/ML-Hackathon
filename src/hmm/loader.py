@@ -3,9 +3,7 @@
 This module provides a unified loader for PathSnap / Ufa / Germany GPS trips:
 - Reads .track, .nodes, .arcs, and optional .route files.
 - Verifies coordinate order: Column 0 is Longitude (X), Column 1 is Latitude (Y).
-- Projects geographic coordinates (WGS84 lon/lat) to a metric UTM projection
-  using pyproj so all distance calculations are performed in meters rather than
-  Euclidean degrees.
+- Projects geographic coordinates to a local equirectangular metric frame.
 """
 
 from __future__ import annotations
@@ -28,7 +26,7 @@ class TripData:
     nodes_lonlat: np.ndarray    # Shape (N, 2), raw WGS84 [lon, lat]
     arcs: np.ndarray            # Shape (M, 2), directed edges [from_node, to_node] (int64)
     route: Optional[np.ndarray] # Shape (L,), reference ground-truth traversed arc_ids (or None)
-    epsg: int                   # UTM EPSG projection code used for metric distances
+    epsg: int                   # UTM zone reference; coordinates use the local projection
 
 
 def get_utm_epsg(lon: float, lat: float) -> int:
@@ -81,8 +79,7 @@ def load_trip_data(
     - In .route: 1 integer column with ordered sequence of ground-truth arc_ids.
 
     Projection:
-    - Automatically determines the local UTM zone from median coordinates.
-    - Uses pyproj.Transformer to convert (lon, lat) -> (x, y) in metric meters.
+    - Uses a local equirectangular projection centered on the road network.
     """
     if trip_dir is None:
         base_path = find_trip_dir(trip_id)

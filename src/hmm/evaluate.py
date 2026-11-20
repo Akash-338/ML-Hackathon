@@ -162,17 +162,13 @@ def evaluate_trip(
                 if ref_arc_ids[t] >= 0:
                     if len(candidates[t]) == 0 or (ref_arc_ids[t] not in candidates[t]):
                         misses += 1
-            miss_rate = float(misses / T)
+            miss_rate = float(misses / np.count_nonzero(valid_mask))
 
     # Status classification: helped / hurt / neutral
     if delta_acc is not None:
         if delta_acc > 0.001:
             status = "helped"
         elif delta_acc < -0.001:
-            status = "hurt"
-        elif delta_cont > 0.001:
-            status = "helped"
-        elif delta_cont < -0.001:
             status = "hurt"
         else:
             status = "neutral"

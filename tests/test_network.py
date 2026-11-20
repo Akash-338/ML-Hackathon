@@ -3,6 +3,45 @@
 import numpy as np
 import pytest
 from src.hmm.network import RoadNetwork
+from src.hmm.evaluate import evaluate_trip
+from src.hmm.dev_candidates import generate_dev_candidates
+
+
+def test_dev_candidates_preserve_observations_for_empty_network():
+    network = RoadNetwork(np.array([[0., 0.]]), np.empty((0, 2), dtype=int))
+    candidates, scores = generate_dev_candidates(np.zeros((2, 2)), network)
+    assert len(candidates) == len(scores) == 2
+    assert all(len(row) == 0 for row in candidates + scores)
+
+
+def test_bounded_search_keeps_distinct_hop_counts():
+    nodes = np.array([[-1., 0.], [0., 0.], [1., 0.], [2., 0.], [3., 0.], [1.5, 2.], [4., 0.], [5., 0.]])
+    arcs = np.array([[0, 1], [1, 2], [2, 3], [3, 4], [1, 5], [5, 4], [4, 6], [6, 7]])
+    network = RoadNetwork(nodes, arcs)
+    # The shorter path to node 4 uses too many hops to continue to arc 7.
+    assert network.shortest_path_distance(0, 7, max_hops=4, max_meters=20) == pytest.approx(7.0)
+
+
+def test_direct_transition_respects_distance_limit():
+    network = RoadNetwork(np.array([[0., 0.], [1., 0.], [11., 0.]]), np.array([[0, 1], [1, 2]]))
+    assert network.shortest_path_distance(0, 1, max_hops=1, max_meters=5) is None
+
+
+def test_candidate_miss_rate_uses_only_labeled_observations():
+    network = RoadNetwork(np.array([[0., 0.], [1., 0.], [2., 0.]]), np.array([[0, 1], [1, 2]]))
+    metrics = evaluate_trip("trip", np.array([0, 0, 0]), np.array([0, 0, 0]),
+                            np.array([0, 1, -1]), [np.array([0]), np.array([0]), np.array([])],
+                            network, 0., 0.)
+    assert metrics.candidate_miss_rate == pytest.approx(0.5)
+
+
+def test_accuracy_status_does_not_count_continuity_as_accuracy_gain():
+    network = RoadNetwork(np.array([[0., 0.], [1., 0.], [2., 0.]]), np.array([[0, 1], [1, 2]]))
+    metrics = evaluate_trip("trip", np.array([0, 1]), np.array([1, 0]),
+                            np.array([0, 0]), [np.array([0, 1])] * 2, network, 0., 0.)
+    assert metrics.delta_accuracy == 0
+    assert metrics.delta_continuity > 0
+    assert metrics.status == "neutral"
 
 
 def test_network_basic_connectivity():

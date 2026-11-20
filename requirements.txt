@@ -11,5 +11,8 @@ pyproj>=3.6.0
 folium>=0.15.0
 networkx>=3.0
 streamlit>=1.35.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+requests>=2.31.0
 # Testing & Quality Assurance
 pytest>=8.0.0

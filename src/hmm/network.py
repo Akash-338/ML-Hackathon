@@ -109,8 +109,9 @@ class RoadNetwork:
 
         # Case 2: Directly connected (1 hop: arc_prev.to_node == arc_cur.from_node)
         if start_to_node == target_from_node:
-            self._dist_cache[cache_key] = cur_arc_len
-            return cur_arc_len
+            distance = cur_arc_len if max_hops >= 1 and cur_arc_len <= max_meters else None
+            self._dist_cache[cache_key] = distance
+            return distance
 
         # If max_hops <= 1 and not directly connected, cannot reach
         if max_hops <= 1:
@@ -120,7 +121,7 @@ class RoadNetwork:
         # Case 3: Multi-hop bounded Dijkstra from start_to_node to target_from_node
         # Queue entries: (accumulated_dist, hops_used, current_node)
         pq: List[Tuple[float, int, int]] = [(0.0, 0, start_to_node)]
-        best_dist: Dict[int, float] = {start_to_node: 0.0}
+        best_dist: Dict[Tuple[int, int], float] = {(start_to_node, 0): 0.0}
         found_dist: Optional[float] = None
 
         max_intermediate_hops = max_hops - 1
@@ -133,7 +134,7 @@ class RoadNetwork:
                 found_dist = d + cur_arc_len
                 break
 
-            if d > best_dist.get(u, float("inf")):
+            if d > best_dist.get((u, hops), float("inf")):
                 continue
 
             if hops >= max_intermediate_hops or d >= intermediate_cutoff:
@@ -143,8 +144,8 @@ class RoadNetwork:
                 new_d = d + edge_len
                 if new_d > intermediate_cutoff:
                     continue
-                if new_d < best_dist.get(v, float("inf")):
-                    best_dist[v] = new_d
+                if new_d < best_dist.get((v, hops + 1), float("inf")):
+                    best_dist[(v, hops + 1)] = new_d
                     heapq.heappush(pq, (new_d, hops + 1, v))
 
         self._dist_cache[cache_key] = found_dist
