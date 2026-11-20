@@ -47,8 +47,11 @@ def generate_dev_candidates(
         - scores: List of length T, each item is an np.ndarray of probabilities summing to 1.0.
     """
     T = len(gps_xy)
-    if T == 0 or network.num_arcs == 0:
+    if T == 0:
         return [], []
+    if network.num_arcs == 0:
+        return ([np.empty(0, dtype=np.int64) for _ in range(T)],
+                [np.empty(0, dtype=np.float64) for _ in range(T)])
 
     candidates: List[np.ndarray] = []
     scores: List[np.ndarray] = []

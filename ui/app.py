@@ -58,7 +58,7 @@ if st.button("Reconstruct and show map", type="primary"):
 
 
 stored = st.session_state.get("map_result")
-if stored:
+if stored and stored[0].get("trip_id") == trip_id:
     map_data, prediction = stored
     gps = map_data["gps"]
     nodes = map_data["nodes"]

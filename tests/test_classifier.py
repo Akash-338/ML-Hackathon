@@ -55,6 +55,14 @@ def test_reader_rejects_evaluator_test(tmp_path: Path):
         train_classifier.read_jsonl(tmp_path / "evaluator_test.jsonl", "train")
 
 
+def test_top1_accuracy_counts_wrong_and_missing_candidates():
+    frame = pd.DataFrame({"trip_id": ["a"] * 5, "observation_index": [0, 0, 1, 1, 2],
+                          "label": [1, 0, 1, 0, 0]})
+    metrics = train_classifier.observation_metrics(frame, np.array([0.9, 0.1, 0.2, 0.8, 0.5]))
+    assert metrics["top1_accuracy"] == pytest.approx(1 / 3)
+    assert metrics["candidate_miss_rate"] == pytest.approx(1 / 3)
+
+
 def test_group_cross_validation_and_five_models(tmp_path: Path):
     train_path = _candidate_rows(tmp_path, "train")
     test_path = _candidate_rows(tmp_path, "student_test")
@@ -115,3 +123,6 @@ def test_entrypoint_smoke_run(tmp_path: Path, monkeypatch):
     assert (artifacts / "metadata.json").exists()
     assert (results / "model_comparison.csv").exists()
     assert (results / "student_test_predictions.jsonl").exists()
+    summary = json.loads((results / "student_test_summary.json").read_text(encoding="utf-8"))
+    assert summary["candidate_coverage_evaluated"] is False
+    assert summary["candidate_miss_rate"] is None

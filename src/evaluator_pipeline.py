@@ -73,6 +73,8 @@ class SavedArtifactPipeline:
             arc_col="arc_id",
             score_col="probability",
         )
+        top1 = [int(arcs[np.argmax(scores)]) if len(arcs) else -1
+                for arcs, scores in zip(candidate_arrays, score_arrays)]
         decoded = decode_trip(
             timestamps=timestamps,
             gps_xy=gps_xy,
