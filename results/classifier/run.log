@@ -1,3 +1,11 @@
-[2026-11-18 14:41:27,963][INFO] Using 80 training trips and 1666880 candidate rows
-[2026-11-18 14:41:27,992][INFO] Using 10 student-test trips; route/ground-truth labels are not read
-[2026-11-18 14:46:16,970][INFO] Model logistic_regression: macro_f1=0.6752 top1=1.0000 log_loss=0.48516671332689265
+[2026-11-18 16:55:07,487][INFO] Fast mode: capped training data to 100000 candidate rows across 80 trips
+[2026-11-18 16:55:07,535][INFO] Using 80 training trips and 100000 candidate rows
+[2026-11-18 16:55:07,556][INFO] Using 10 student-test trips; route/ground-truth labels are not read
+[2026-11-18 16:55:50,789][INFO] Model logistic_regression: macro_f1=0.7561 top1=1.0000 log_loss=0.33362444845531364
+[2026-11-18 16:56:54,824][INFO] Model knn: macro_f1=0.8504 top1=1.0000 log_loss=0.8095236449245207
+[2026-11-18 16:57:45,615][INFO] Model random_forest: macro_f1=0.8588 top1=1.0000 log_loss=0.17788534017853425
+[2026-11-18 16:58:39,408][INFO] Model extra_trees: macro_f1=0.8244 top1=1.0000 log_loss=0.24583066193262776
+[2026-11-18 16:59:40,830][INFO] Model hist_gradient_boosting: macro_f1=0.8737 top1=1.0000 log_loss=0.13677852524303072
+[2026-11-18 16:59:43,231][INFO] Selected model: hist_gradient_boosting
+[2026-11-18 16:59:43,231][INFO] Saved model artifact: artifacts\classifier\model.joblib
+[2026-11-18 16:59:43,232][INFO] Saved student-test predictions: results\classifier\student_test_predictions.jsonl
